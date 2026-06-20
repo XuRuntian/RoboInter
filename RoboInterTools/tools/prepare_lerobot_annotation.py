@@ -106,7 +106,7 @@ def prepare_video(video_path: Path, dst: Path, transcode: bool, force: bool) -> 
 def write_video_mapping(out_dir: Path, videos: list[Path]) -> Path:
     mapping_path = out_dir / "video_2_anno.json"
     with mapping_path.open("w") as f:
-        json.dump({str(video.resolve()): "" for video in videos}, f, indent=2)
+        json.dump({str(video.absolute()): "" for video in videos}, f, indent=2)
     return mapping_path
 
 
@@ -123,7 +123,7 @@ def distribute_videos(video_paths: list[Path], users: list[str], save_path_templ
     for idx, video_path in enumerate(video_paths):
         user = users[idx % len(users)]
         video_name = video_path.stem
-        pools[user][str(video_path.resolve())] = {
+        pools[user][str(video_path.absolute())] = {
             "anno_path": "",
             "save_path": save_path_template.format(video_name=video_name),
         }

@@ -69,6 +69,56 @@ def save_user_history(user_name, mode, history, suffix=""):
         os.fsync(f.fileno())
 
 
+def extract_lang_text(lang):
+    if isinstance(lang, (list, tuple)):
+        return lang[0] if len(lang) > 0 else ""
+    return lang
+
+
+def validate_language_annotation(anno):
+    if not anno.get("video"):
+        return "请标注整体视频的语言描述"
+
+    clips = anno.get("clip", [])
+    if not clips:
+        return "请至少标注一个视频片段"
+
+    try:
+        sorted_clips = sorted(clips, key=lambda item: int(item["start_frame"]))
+    except (KeyError, TypeError, ValueError):
+        return "视频片段格式错误"
+
+    expected_start = 0
+    final_frame = int(anno.get("frames", 0))
+    for clip in sorted_clips:
+        try:
+            start_frame = int(clip["start_frame"])
+            end_frame = int(clip["end_frame"])
+        except (KeyError, TypeError, ValueError):
+            return "视频片段帧范围格式错误"
+
+        if start_frame != expected_start:
+            if expected_start == 0:
+                return "第一个视频片段必须从第1帧开始"
+            return (
+                f"视频片段不连续：上一段结束后应从第{expected_start + 1}帧开始，"
+                f"但下一段从第{start_frame + 1}帧开始"
+            )
+
+        if end_frame < start_frame:
+            return f"视频片段帧范围错误：第{start_frame + 1}帧到第{end_frame + 1}帧"
+
+        if not extract_lang_text(clip.get("description")):
+            return f"请完成帧{start_frame + 1}到帧{end_frame + 1}之间的语言标注"
+
+        expected_start = end_frame + 1
+
+    if expected_start != final_frame + 1:
+        return f"最后一个视频片段必须覆盖到第{final_frame + 1}帧"
+
+    return None
+
+
 def get_diff(a, b):
     """Get items in a but not in b (by filename)."""
     a_dict = {i.split('/')[-1].strip(): i for i in a}
@@ -359,6 +409,12 @@ def save_anno():
     save_path = request.form.get('save_path')
     user_name = anno.get('user', 'unknown')
     video_path = anno.get('video_path', '')
+
+    mode = 'sam' if 'human_anno_sam' in save_path or '/sam/' in save_path else 'lang'
+    if mode == 'lang':
+        validation_error = validate_language_annotation(anno)
+        if validation_error:
+            return {"error": validation_error}, 400
     
     if '/0/' in video_path:
         time = '_1'
@@ -372,11 +428,6 @@ def save_anno():
     # Save annotation file
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     np.savez(save_path, pickle.dumps(anno))
-    
-    if 'sam' in save_path:
-        mode = 'sam'
-    else:
-        mode = 'lang'
 
     # Update user history
     history = get_user_history(user_name, mode, time)

@@ -153,7 +153,7 @@ def save_anno(ip, port, save_path, anno):
     if response.status_code == 200:
         return True
     else:
-        print("Error:", response)
+        print("Error:", response, response.text)
         return False
 
 
