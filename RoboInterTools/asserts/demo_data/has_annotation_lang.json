@@ -1,3 +1,1 @@
-{
-  "root": {}
-}
+{"root": {"/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000000.mp4": {"anno_path": "", "save_path": "asserts/demo_data/human_anno_lang/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000000.npz"}}}

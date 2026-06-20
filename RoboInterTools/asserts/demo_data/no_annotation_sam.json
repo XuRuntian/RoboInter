@@ -1,8 +1,32 @@
 {
   "root": {
-    "asserts/demo_data/video/RH20T_cfg2_task_0034_user_0003_scene_0007_cfg_0002_104422070044.mp4": {
-      "anno_path": "asserts/demo_data/lang_anno/RH20T_cfg2_task_0034_user_0003_scene_0007_cfg_0002.npz",
-      "save_path": "asserts/demo_data/human_anno_sam/0/sam/RH20T_cfg2_task_0034_user_0003_scene_0007_cfg_0002_104422070044.npz"
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000000.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000000.npz"
+    },
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000001.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000001.npz"
+    },
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000002.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000002.npz"
+    },
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000003.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000003.npz"
+    },
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000004.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000004.npz"
+    },
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000005.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000005.npz"
+    },
+    "/home/user/RoboInter/RoboInterTools/asserts/demo_data/video/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000006.mp4": {
+      "anno_path": "",
+      "save_path": "asserts/demo_data/human_anno_sam/0/sam/Galbot_G1_storage_baozi_0_cam_high_rgb_episode_000006.npz"
     }
   }
 }

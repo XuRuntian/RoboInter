@@ -1140,7 +1140,7 @@ class VideoPlayer(QWidget):
                 one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, three_anno_num, all_three_anno_num = res
         else:
             video, lang, save_path, video_path, hist_num = res
-            if lang['has_ori_instruction']:
+            if lang and lang.get('has_ori_instruction'):
                 self.video_2_lang = lang['annotation']
                 task_stepsC = self.video_2_lang['task_stepsC'].copy()
                 self.video_2_lang['task_stepsC'] = dict()
