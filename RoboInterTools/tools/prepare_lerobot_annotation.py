@@ -112,12 +112,12 @@ def prepare_video(video_path: Path, dst: Path, transcode: bool, force: bool) -> 
     print(dst)
 
 
-def group_multiview_videos(videos: list[Path]) -> dict[str, dict[str, str]]:
+def group_multiview_videos(video_pairs: list[tuple[Path, Path]]) -> dict[str, dict[str, str]]:
     grouped: dict[str, dict[str, str]] = {}
-    for video in videos:
-        key = flat_episode_name(video)
-        camera = sanitize_name(camera_name(video).replace(".", "_"))
-        grouped.setdefault(key, {})[camera] = str(video.absolute())
+    for source_video, prepared_video in video_pairs:
+        key = flat_episode_name(source_video)
+        camera = sanitize_name(camera_name(source_video).replace(".", "_"))
+        grouped.setdefault(key, {})[camera] = str(prepared_video.absolute())
     return grouped
 
 
@@ -163,11 +163,17 @@ def distribute_multiview_episodes(grouped_videos: dict[str, dict[str, str]], use
 
 
 def write_annotation_pools(out_dir: Path, videos: list[Path], users: list[str], config: dict) -> None:
+    video_pairs = [(video, video) for video in videos]
+    write_annotation_pools_from_pairs(out_dir, video_pairs, users, config)
+
+
+def write_annotation_pools_from_pairs(out_dir: Path, video_pairs: list[tuple[Path, Path]], users: list[str], config: dict) -> None:
     server_cfg = config["server"]
+    prepared_videos = [prepared_video for _, prepared_video in video_pairs]
     lang_pool = distribute_multiview_episodes(
-        group_multiview_videos(videos), users, server_cfg["save_path_lang_temp"]
+        group_multiview_videos(video_pairs), users, server_cfg["save_path_lang_temp"]
     )
-    sam_pool = distribute_videos(videos, users, server_cfg["save_path_sam_temp"])
+    sam_pool = distribute_videos(prepared_videos, users, server_cfg["save_path_sam_temp"])
     for mode, no_annotation in (("lang", lang_pool), ("sam", sam_pool)):
         has_annotation = {user: {} for user in users}
         with (out_dir / f"no_annotation_{mode}.json").open("w") as f:
@@ -293,22 +299,24 @@ def main() -> None:
         raise RuntimeError("No videos matched the dataset path and camera filter")
 
     prepared_videos: list[Path] = []
+    prepared_video_pairs: list[tuple[Path, Path]] = []
     for source_video in source_videos:
         dst = video_out_dir / flat_video_name(source_video)
         prepare_video(source_video, dst, args.transcode, args.force)
         prepared_videos.append(dst)
+        prepared_video_pairs.append((source_video, dst))
 
     users = args.user or ["root"]
     write_video_mapping(out_dir, prepared_videos)
     write_user_list(out_dir, users)
 
     config = build_config(root_dir, out_dir, args.device)
-    write_annotation_pools(out_dir, prepared_videos, users, config)
+    write_annotation_pools_from_pairs(out_dir, prepared_video_pairs, users, config)
     backup_path = backup_and_write_config(args.config, config)
 
     print("\nDone.")
     print(f"Prepared videos: {len(prepared_videos)}")
-    print(f"Language episodes: {len(group_multiview_videos(prepared_videos))}")
+    print(f"Language episodes: {len(group_multiview_videos(prepared_video_pairs))}")
     print(f"Work directory: {out_dir}")
     print(f"Task mapping: {out_dir / 'video_2_anno.json'}")
     print(f"SAM pool: {out_dir / 'no_annotation_sam.json'}")
