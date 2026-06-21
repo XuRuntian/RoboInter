@@ -13,12 +13,14 @@ Output LMDB format (per-frame storage following formulation.py):
             "instruction_add": "make a burger",
             "substask": "pick up the burger",
             "primitive_skill": "pick",
+            "skill": "pick",
+            "coordination_mode": "primary_with_support",
+            "actions": [{"subject": "right_gripper", "skill": "pick", "slots": {...}}],
             "segmentation": None,
             "object_box": [[x1,y1],[x2,y2]],
             "placement_proposal": [[x1,y1],[x2,y2]],
             "trace": [[x,y],...],  # next 10 steps
             "gripper_box": [[x1,y1],[x2,y2]],
-            "contact_frame": 101,
             "state_affordance": [...],
             "affordance_box": [[x1,y1],[x2,y2]],
             "contact_points": [101, 102],
@@ -44,6 +46,27 @@ def load_pkl(pkl_path):
         data = pickle.load(f)
     print(f"  Loaded {len(data)} items")
     return data
+
+
+def normalize_skill_text_language(all_language):
+    if not all_language or all_language.get("schema_version") != "skill_text_v1":
+        return None
+
+    subtasks = sorted(all_language.get("subtasks", []), key=lambda subtask: subtask.get("start_frame", 0))
+    subtask_texts = [subtask.get("text") for subtask in subtasks]
+    primary_skills = [
+        (subtask.get("actions") or [{}])[0].get("skill")
+        for subtask in subtasks
+    ]
+    return {
+        "time_clip": [[subtask.get("start_frame"), subtask.get("end_frame")] for subtask in subtasks],
+        "instruction_steps": subtask_texts,
+        "task_steps": subtask_texts,
+        "action_steps": primary_skills,
+        "skill_steps": primary_skills,
+        "coordination_mode_steps": [subtask.get("coordination_mode") for subtask in subtasks],
+        "actions_steps": [subtask.get("actions") for subtask in subtasks],
+    }
 
 
 def check_posi_available(trajs, min_value, max_value):
@@ -206,10 +229,14 @@ def convert_single_item(key, inter_data, data_lmdb_path):
         return None
 
     # Language-related fields (may be None)
-    raw_time_clip = all_language.get('time_clip', []) if all_language else None
-    instruction = all_language.get('instruction', '') if all_language else None
-    task_steps = all_language.get('task_steps', []) if all_language else None
-    action_steps = all_language.get('action_steps', []) if all_language else None
+    language_source = normalize_skill_text_language(all_language)
+    raw_time_clip = language_source.get('time_clip', []) if language_source else None
+    instruction_steps = language_source.get('instruction_steps', []) if language_source else None
+    task_steps = language_source.get('task_steps', []) if language_source else None
+    action_steps = language_source.get('action_steps', []) if language_source else None
+    skill_steps = language_source.get('skill_steps', []) if language_source else None
+    coordination_mode_steps = language_source.get('coordination_mode_steps', []) if language_source else None
+    actions_steps = language_source.get('actions_steps', []) if language_source else None
 
     # Get origin_shape
     origin_shape = inter_data.get('origin_shape')
@@ -235,15 +262,17 @@ def convert_single_item(key, inter_data, data_lmdb_path):
         frame_data = {
             'origin_shape': origin_shape if origin_shape else None,
             'time_clip': time_clip if time_clip else None,
-            'instruction_add': instruction if instruction else None,
+            'instruction_add': None,
             'substask': None,
             'primitive_skill': None,
+            'skill': None,
+            'coordination_mode': None,
+            'actions': None,
             'segmentation': None,  # not stored for now
             'object_box': None,
             'placement_proposal': None,
             'trace': None,
             'gripper_box': None,
-            'contact_frame': None,
             'state_affordance': None,
             'affordance_box': None,
             'contact_points': None,
@@ -251,10 +280,18 @@ def convert_single_item(key, inter_data, data_lmdb_path):
 
         # Get the step index corresponding to the current frame
         step_i = frame_to_step.get(frame_id, 0)
+        if instruction_steps and step_i < len(instruction_steps):
+            frame_data['instruction_add'] = instruction_steps[step_i]
         if task_steps and step_i < len(task_steps):
             frame_data['substask'] = task_steps[step_i]
         if action_steps and step_i < len(action_steps):
             frame_data['primitive_skill'] = action_steps[step_i]
+        if skill_steps and step_i < len(skill_steps):
+            frame_data['skill'] = skill_steps[step_i]
+        if coordination_mode_steps and step_i < len(coordination_mode_steps):
+            frame_data['coordination_mode'] = coordination_mode_steps[step_i]
+        if actions_steps and step_i < len(actions_steps):
+            frame_data['actions'] = actions_steps[step_i]
 
         # Get gripper_box
         if all_gripper_box is not None and frame_id in all_gripper_box:
@@ -282,8 +319,6 @@ def convert_single_item(key, inter_data, data_lmdb_path):
         grasp_pose_frame, subtask_range, contact_pt, contact_box = get_contact_info_for_frame(frame_id, all_contact_point)
 
         if grasp_pose_frame is not None and  grasp_pose_frame != -1:
-            frame_data['contact_frame'] = grasp_pose_frame
-
             state_aff = get_frame_state(data_lmdb_path+key, grasp_pose_frame)
             frame_data['state_affordance'] = state_aff.tolist() if hasattr(state_aff, 'tolist') else list(state_aff)
 
@@ -302,7 +337,6 @@ def convert_single_item(key, inter_data, data_lmdb_path):
                     frame_data['affordance_box'] = to_int_list(aff_box)
 
         elif grasp_pose_frame == -1:
-            frame_data['contact_frame'] = -1
             frame_data['affordance_box'] = []
             frame_data['contact_points'] = []
             frame_data['state_affordance'] = []

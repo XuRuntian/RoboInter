@@ -37,6 +37,12 @@ TEMPLATE_SET_VERSION, SKILL_TEMPLATES = load_skill_templates()
 COORDINATION_MODES = load_coordination_modes()
 
 
+def primary_video_path(task_id, video_info):
+    if isinstance(video_info, dict):
+        return video_info.get("video_path") or next(iter(sorted((video_info.get("views") or {}).values())), task_id)
+    return task_id
+
+
 def load_server_config(config_path="./config/config.yaml"):
     """Load server configuration from yaml file."""
     global CONFIG, ROOT_DIR, PATHS
@@ -168,21 +174,21 @@ def get_video_lang():
 
                 if len(user_pool) == 0:
                     is_finished = True
-                    video_path = None
+                    task_id = None
                 else:
                     is_finished = False
 
                     if mode == 'pre' and last_video_path:
                         # Return to previous video
-                        video_path = history[-1].strip() if history else None
+                        task_id = history[-1].strip() if history else None
                         if last_video_path in user_has:
                             no_annotation.setdefault(user_name, {})[last_video_path] = user_has[last_video_path].copy()
                             del has_annotation[user_name][last_video_path]
                     else:
                         # Get next video
-                        video_path = list(user_pool.keys())[0]
-                        has_annotation.setdefault(user_name, {})[video_path] = user_pool[video_path].copy()
-                        del no_annotation[user_name][video_path]
+                        task_id = list(user_pool.keys())[0]
+                        has_annotation.setdefault(user_name, {})[task_id] = user_pool[task_id].copy()
+                        del no_annotation[user_name][task_id]
 
                 f2.seek(0)
                 f2.truncate()
@@ -201,15 +207,26 @@ def get_video_lang():
     with zipfile.ZipFile(zip_io, "w") as zf:
         zf.writestr("is_finished", str(is_finished))
 
-        if not is_finished and video_path:
-            # Read video file
-            if os.path.exists(video_path):
-                with zf.open("video.mp4", "w") as f:
-                    with open(video_path, "rb") as video_file:
-                        f.write(video_file.read())
-
+        if not is_finished and task_id:
             # Get annotation info
-            video_info = has_annotation.get(user_name, {}).get(video_path, {})
+            video_info = has_annotation.get(user_name, {}).get(task_id, {})
+            views = video_info.get("views") if isinstance(video_info, dict) else None
+            if views:
+                view_manifest = {}
+                for view_name, view_path in sorted(views.items()):
+                    if os.path.exists(view_path):
+                        zip_name = f"videos/{view_name}.mp4"
+                        with zf.open(zip_name, "w") as f:
+                            with open(view_path, "rb") as video_file:
+                                f.write(video_file.read())
+                        view_manifest[view_name] = zip_name
+                if not view_manifest:
+                    raise FileNotFoundError(f"No existing view videos for task {task_id}")
+                zf.writestr("video_views.json", json.dumps(view_manifest))
+            elif os.path.exists(task_id):
+                with zf.open("video.mp4", "w") as f:
+                    with open(task_id, "rb") as video_file:
+                        f.write(video_file.read())
 
             # Load annotation if exists
             anno_path = video_info.get('anno_path')
@@ -229,7 +246,8 @@ def get_video_lang():
             # Include paths
             save_path = video_info.get('save_path', '')
             zf.writestr("save_path", save_path)
-            zf.writestr("video_path", video_path)
+            zf.writestr("video_path", task_id)
+            zf.writestr("primary_video_path", primary_video_path(task_id, video_info))
             zf.writestr("history_number", str(len(history)))
 
     zip_io.seek(0)
@@ -380,6 +398,7 @@ def save_anno():
     save_path = request.form.get('save_path')
     user_name = request.form.get('user') or request.form.get('user_name') or anno.get('user', 'unknown')
     video_path = request.form.get('video_path') or anno.get('video_path', '')
+    primary_path = request.form.get('primary_video_path') or video_path
 
     mode = 'sam' if 'human_anno_sam' in save_path or '/sam/' in save_path else 'lang'
     if mode == 'lang':
@@ -387,11 +406,11 @@ def save_anno():
         if validation_error:
             return {"error": validation_error}, 400
     
-    if '/0/' in video_path:
+    if '/0/' in primary_path:
         time = '_1'
-    elif '/1/' in video_path:
+    elif '/1/' in primary_path:
         time = '_2'
-    elif '/2/' in video_path:
+    elif '/2/' in primary_path:
         time = '_3'
     else:
         time = ''

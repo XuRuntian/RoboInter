@@ -447,7 +447,7 @@ class VideoPlayer(QWidget):
         self.mode, self.username, self.ip_address, self.port, self.time = self.mode_choose()
         if self.mode == '语言标注':
             #resize the window
-            self.setFixedSize(1300, 700)
+            self.setFixedSize(1500, 760)
         else:
             self.setFixedSize(1900, 730)
         ###########################################################
@@ -458,7 +458,9 @@ class VideoPlayer(QWidget):
         self.video_label = QLabel(self)
         self.video_label.setMouseTracking(True)
         self.video_label.setAlignment(Qt.AlignCenter)
-        video_layout.addWidget(self.video_label)
+        self.video_views_layout = QGridLayout()
+        self.video_views_layout.addWidget(self.video_label, 0, 0)
+        video_layout.addLayout(self.video_views_layout)
         # Progress slider
         self.progress_slider = QSlider(self)
         self.progress_slider.setOrientation(Qt.Horizontal)  
@@ -840,6 +842,7 @@ class VideoPlayer(QWidget):
         self.sam_point_anno = dict()
         self.lang_only_anno = dict()
         self.video_path = None
+        self.primary_video_path = None
         self.frame_contact = set()
         
         self.next_video_and_load(is_first=True)
@@ -1268,7 +1271,11 @@ class VideoPlayer(QWidget):
                 return -1
             lang_res["subtasks"].append(subtask)
 
-        save_metadata = {"user": self.username, "video_path": self.video_path}
+        save_metadata = {
+            "user": self.username,
+            "video_path": self.video_path,
+            "primary_video_path": self.primary_video_path or self.video_path,
+        }
         res = save_anno(self.ip_address, self.port, self.save_path, lang_res, save_metadata)
         try_time = 0
         while not res:
@@ -1342,6 +1349,13 @@ class VideoPlayer(QWidget):
            
     def clear_video(self):
         self.video_label.clear()
+        self.video_views = None
+        if hasattr(self, "video_view_labels"):
+            for label in self.video_view_labels.values():
+                label.clear()
+                label.setParent(None)
+                label.deleteLater()
+            self.video_view_labels = {}
         self.progress_slider.setValue(0)
         self.frame_position_label.hide()
         self.keyframes = {}
@@ -1435,7 +1449,11 @@ class VideoPlayer(QWidget):
             video, save_path, video_path, hist_num, \
                 one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, three_anno_num, all_three_anno_num = res
         else:
-            video, lang, save_path, video_path, hist_num = res
+            if len(res) == 6:
+                video, lang, save_path, primary_video_path, hist_num, task_id = res
+            else:
+                video, lang, save_path, primary_video_path, hist_num = res
+                task_id = primary_video_path
             self.loaded_lang_annotation = (
                 lang if isinstance(lang, dict) and lang.get("schema_version") == SCHEMA_VERSION else None
             )
@@ -1445,6 +1463,8 @@ class VideoPlayer(QWidget):
                 action_stepsC=[],
                 task_stepsC_list=[]
             )
+            video_path = task_id
+            self.primary_video_path = primary_video_path
         self.save_path = save_path
         self.video_path = video_path
         self.hist_num = hist_num
@@ -1486,11 +1506,17 @@ class VideoPlayer(QWidget):
     def load_video(self, video):
         if video is None:
             return -1
-        self.frame_count = video.shape[0]
+        self.video_views = video if isinstance(video, dict) else None
+        if self.video_views:
+            min_frames = min(view_video.shape[0] for view_video in self.video_views.values())
+            self.frame_count = min_frames
+        else:
+            self.frame_count = video.shape[0]
         self.sam_object_id = [0] * self.frame_count
         self.lang_anno = dict()
         self.tracking_points_sam = dict()
-        self.ori_video = np.array(video)
+        self.ori_video = self.video_views if self.video_views else np.array(video)
+        self.setup_video_view_labels()
         self.sam_obj_pos_label.setText("标注物体: 1/1")
         
         for i in range(self.frame_count):
@@ -1559,6 +1585,13 @@ class VideoPlayer(QWidget):
         return 1
             
     def update_frame(self, frame_number):
+        if self.video_views:
+            if len(self.video_views) == 0:
+                self.smart_message('请先加载视频！')
+                return
+            self.update_multiview_frame(frame_number)
+            return
+
         if  len(self.ori_video) == 0:
             self.smart_message('请先加载视频！')
             return
@@ -1581,6 +1614,62 @@ class VideoPlayer(QWidget):
         self.last_frame = resized_frame
         
         self.draw_image()
+
+    def setup_video_view_labels(self):
+        if not hasattr(self, "video_view_labels"):
+            self.video_view_labels = {}
+        for label in self.video_view_labels.values():
+            label.setParent(None)
+            label.deleteLater()
+        self.video_view_labels = {}
+
+        while self.video_views_layout.count():
+            item = self.video_views_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                self.video_views_layout.removeWidget(widget)
+
+        if self.mode == '语言标注' and self.video_views:
+            for idx, view_name in enumerate(sorted(self.video_views)):
+                view_box = QVBoxLayout()
+                name_label = QLabel(view_name, self)
+                name_label.setAlignment(Qt.AlignCenter)
+                name_label.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+                frame_label = QLabel(self)
+                frame_label.setAlignment(Qt.AlignCenter)
+                frame_label.setMinimumSize(360, 220)
+                view_box.addWidget(name_label)
+                view_box.addWidget(frame_label)
+                self.video_views_layout.addLayout(view_box, idx // 2, idx % 2)
+                self.video_view_labels[view_name] = frame_label
+            self.video_label.hide()
+        else:
+            self.video_label.show()
+            self.video_views_layout.addWidget(self.video_label, 0, 0)
+
+    def update_multiview_frame(self, frame_number):
+        self.update_frame_position_label()
+        for view_name, video in self.video_views.items():
+            frame = video[frame_number]
+            height, width, _ = frame.shape
+            label = self.video_view_labels.get(view_name)
+            if label is None:
+                continue
+            label_width = max(label.width(), 360)
+            label_height = max(label.height(), 220)
+            scale = min(label_width / width, label_height / height)
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+            q_image = QImage(
+                resized_frame.data,
+                resized_frame.shape[1],
+                resized_frame.shape[0],
+                resized_frame.strides[0],
+                QImage.Format_RGB888,
+            )
+            label.setPixmap(QPixmap.fromImage(q_image))
+        self.last_frame = True
                 
     def seek_video(self):
         if self.last_frame is None:

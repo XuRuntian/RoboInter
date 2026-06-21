@@ -65,6 +65,15 @@ def flat_video_name(video_path: Path) -> str:
     return f"{camera}_{chunk}_{video_path.name}"
 
 
+def episode_name(video_path: Path) -> str:
+    return video_path.stem
+
+
+def flat_episode_name(video_path: Path) -> str:
+    chunk = sanitize_name(chunk_name(video_path))
+    return f"{chunk}_{episode_name(video_path)}"
+
+
 def prepare_video(video_path: Path, dst: Path, transcode: bool, force: bool) -> None:
     if dst.exists() or dst.is_symlink():
         if not force:
@@ -103,6 +112,15 @@ def prepare_video(video_path: Path, dst: Path, transcode: bool, force: bool) -> 
     print(dst)
 
 
+def group_multiview_videos(videos: list[Path]) -> dict[str, dict[str, str]]:
+    grouped: dict[str, dict[str, str]] = {}
+    for video in videos:
+        key = flat_episode_name(video)
+        camera = sanitize_name(camera_name(video).replace(".", "_"))
+        grouped.setdefault(key, {})[camera] = str(video.absolute())
+    return grouped
+
+
 def write_video_mapping(out_dir: Path, videos: list[Path]) -> Path:
     mapping_path = out_dir / "video_2_anno.json"
     with mapping_path.open("w") as f:
@@ -130,15 +148,27 @@ def distribute_videos(video_paths: list[Path], users: list[str], save_path_templ
     return pools
 
 
+def distribute_multiview_episodes(grouped_videos: dict[str, dict[str, str]], users: list[str], save_path_template: str) -> dict:
+    pools = {user: {} for user in users}
+    for idx, (episode_id, views) in enumerate(sorted(grouped_videos.items())):
+        user = users[idx % len(users)]
+        primary_video = next(iter(sorted(views.values())))
+        pools[user][episode_id] = {
+            "anno_path": "",
+            "save_path": save_path_template.format(video_name=episode_id),
+            "views": views,
+            "video_path": primary_video,
+        }
+    return pools
+
+
 def write_annotation_pools(out_dir: Path, videos: list[Path], users: list[str], config: dict) -> None:
     server_cfg = config["server"]
-    for mode in ("lang", "sam"):
-        save_template = (
-            server_cfg["save_path_lang_temp"]
-            if mode == "lang"
-            else server_cfg["save_path_sam_temp"]
-        )
-        no_annotation = distribute_videos(videos, users, save_template)
+    lang_pool = distribute_multiview_episodes(
+        group_multiview_videos(videos), users, server_cfg["save_path_lang_temp"]
+    )
+    sam_pool = distribute_videos(videos, users, server_cfg["save_path_sam_temp"])
+    for mode, no_annotation in (("lang", lang_pool), ("sam", sam_pool)):
         has_annotation = {user: {} for user in users}
         with (out_dir / f"no_annotation_{mode}.json").open("w") as f:
             json.dump(no_annotation, f, indent=2)
@@ -278,6 +308,7 @@ def main() -> None:
 
     print("\nDone.")
     print(f"Prepared videos: {len(prepared_videos)}")
+    print(f"Language episodes: {len(group_multiview_videos(prepared_videos))}")
     print(f"Work directory: {out_dir}")
     print(f"Task mapping: {out_dir / 'video_2_anno.json'}")
     print(f"SAM pool: {out_dir / 'no_annotation_sam.json'}")

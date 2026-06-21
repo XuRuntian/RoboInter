@@ -98,12 +98,26 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
         if is_finished:
             return 0
 
-        with zf.open("video.mp4") as f:
-            video = f.read()
+        video_views = None
+        if mode == 'lang' and "video_views.json" in zf.namelist():
+            with zf.open("video_views.json") as f:
+                view_manifest = json.loads(f.read().decode("utf-8"))
+            video_views = {}
+            for view_name, zip_name in view_manifest.items():
+                with zf.open(zip_name) as f:
+                    video_views[view_name] = f.read()
+            video = None
+        else:
+            with zf.open("video.mp4") as f:
+                video = f.read()
         with zf.open("save_path") as f:
             save_path = f.read().decode("utf-8")
         with zf.open("video_path") as f:
             video_path = f.read().decode("utf-8")
+        primary_video_path = video_path
+        if "primary_video_path" in zf.namelist():
+            with zf.open("primary_video_path") as f:
+                primary_video_path = f.read().decode("utf-8")
         with zf.open("history_number") as f:
             history_number = int(f.read().decode("utf-8"))
 
@@ -124,17 +138,28 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
                     else:
                         anno = anno_data
 
-    frames = []
-    reader = imageio.get_reader(video, "mp4")
-    for _, im in enumerate(reader):
-        frames.append(np.array(im))
+    if video_views is not None:
+        decoded_views = {}
+        for view_name, video_bytes in video_views.items():
+            frames = []
+            reader = imageio.get_reader(video_bytes, "mp4")
+            for _, im in enumerate(reader):
+                frames.append(np.array(im))
+            decoded_views[view_name] = np.stack(frames)
+        video_result = decoded_views
+    else:
+        frames = []
+        reader = imageio.get_reader(video, "mp4")
+        for _, im in enumerate(reader):
+            frames.append(np.array(im))
+        video_result = np.stack(frames)
 
     if mode == 'sam':
-        return np.stack(frames), save_path, video_path, history_number, \
+        return video_result, save_path, video_path, history_number, \
                one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, \
                three_anno_num, all_three_anno_num
     else:
-        return np.stack(frames), anno, save_path, video_path, history_number
+        return video_result, anno, save_path, primary_video_path, history_number, video_path
 
 
 def save_anno(ip, port, save_path, anno, metadata=None):
