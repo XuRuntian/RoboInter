@@ -58,11 +58,20 @@ def validate_skill_config(skill_config):
         enum_constraints = {}
     if not isinstance(enum_constraints, dict):
         raise ValueError(f"skill {skill_id} enum_constraints must be a dict")
+    enum_display_names = skill_config.get("enum_display_names", {})
+    if enum_display_names is None:
+        skill_config["enum_display_names"] = {}
+        enum_display_names = {}
+    if not isinstance(enum_display_names, dict):
+        raise ValueError(f"skill {skill_id} enum_display_names must be a dict")
     for slot, allowed_values in enum_constraints.items():
         if slot not in required_slot_set:
             raise ValueError(f"skill {skill_id} enum slot {slot} is not in required_slots")
         if not isinstance(allowed_values, list) or not allowed_values:
             raise ValueError(f"skill {skill_id} enum slot {slot} must have non-empty values")
+        display_names = enum_display_names.get(slot, {})
+        if display_names and not isinstance(display_names, dict):
+            raise ValueError(f"skill {skill_id} enum_display_names.{slot} must be a dict")
 
     return True
 
@@ -77,7 +86,20 @@ def load_skill_templates(path=DEFAULT_SKILL_TEMPLATE_PATH):
 
     skills = {}
     global_slot_display_names = data.get("slot_display_names", {}) or {}
+    global_enum_constraints = data.get("enum_constraints", {}) or {}
+    global_enum_display_names = data.get("enum_display_names", {}) or {}
     for skill_config in data.get("skills", []):
+        merged_enum_constraints = dict(global_enum_constraints)
+        merged_enum_constraints.update(skill_config.get("enum_constraints", {}) or {})
+        skill_config["enum_constraints"] = merged_enum_constraints
+
+        merged_enum_display_names = dict(global_enum_display_names)
+        for slot, display_names in (skill_config.get("enum_display_names", {}) or {}).items():
+            slot_display_names = dict(merged_enum_display_names.get(slot, {}) or {})
+            slot_display_names.update(display_names or {})
+            merged_enum_display_names[slot] = slot_display_names
+        skill_config["enum_display_names"] = merged_enum_display_names
+
         validate_skill_config(skill_config)
         slot_display_names = dict(global_slot_display_names)
         slot_display_names.update(skill_config.get("slot_display_names", {}) or {})
@@ -196,7 +218,8 @@ def validate_action(action, skill_templates, prefix="action"):
             return f"{prefix} slot 不能为空: {slot}"
 
     for slot, allowed_values in skill_config.get("enum_constraints", {}).items():
-        if str(slots.get(slot)) not in [str(value) for value in allowed_values]:
+        slot_value = action.get("subject") if slot == "subject" else slots.get(slot)
+        if str(slot_value) not in [str(value) for value in allowed_values]:
             return f"{prefix} 的 {slot} 必须属于 {allowed_values}"
 
     expected_text = render_action_text(action, skill_config)

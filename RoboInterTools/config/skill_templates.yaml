@@ -27,6 +27,43 @@ slot_display_names:
   strike_anchor: 敲击部位
   tool: 工具
 
+enum_constraints:
+  subject:
+    - left_gripper
+    - right_gripper
+    - both_grippers
+    - base
+    - robot_body
+    - left_arm
+    - right_arm
+    - both_arms
+    - unknown
+
+enum_display_names:
+  subject:
+    left_gripper: 左夹爪
+    right_gripper: 右夹爪
+    both_grippers: 双夹爪
+    base: 底盘
+    robot_body: 机器人本体
+    left_arm: 左机械臂
+    right_arm: 右机械臂
+    both_arms: 双臂
+    unknown: 无法判断
+  placement_relation:
+    "on": 在...上
+    in: 在...里
+    into: 放入/进入
+    under: 在...下
+    beside: 在...旁边
+    near: 靠近
+    against: 贴靠/抵住
+    hang_on: 挂在...上
+    back_to: 背靠/靠回
+  rotation_direction:
+    clockwise: 顺时针
+    counterclockwise: 逆时针
+
 skills:
   - id: transfer
     display_name: 拿着物体移动

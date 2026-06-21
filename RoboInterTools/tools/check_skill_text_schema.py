@@ -124,6 +124,16 @@ def main():
         raise AssertionError("pull slots mismatch")
     pass_case("pull 的 UI slot 列表正确")
 
+    if "left_gripper" not in SKILLS["pull"]["enum_constraints"]["subject"]:
+        raise AssertionError("subject enum missing left_gripper")
+    if SKILLS["pull"]["enum_display_names"]["subject"]["left_gripper"] != "左夹爪":
+        raise AssertionError("subject enum display name mismatch")
+    if SKILLS["place"]["enum_display_names"]["placement_relation"]["on"] != "在...上":
+        raise AssertionError("placement_relation display name mismatch")
+    if SKILLS["twist"]["enum_display_names"]["rotation_direction"]["clockwise"] != "顺时针":
+        raise AssertionError("rotation_direction display name mismatch")
+    pass_case("subject/placement/twist 枚举中文显示名能加载")
+
     base_pull = action("pull", pull_values())
     base_pick = action("pick", pick_values())
     expected_pull_text = (
@@ -174,6 +184,12 @@ def main():
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [place_action])]))
     bad["subtasks"][0]["actions"][0]["slots"]["placement_relation"] = "inside"
     assert_fail("place.placement_relation 非法时报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["subtasks"][0]["actions"][0]["subject"] = "human"
+    bad["subtasks"][0]["actions"][0]["text"] = bad["subtasks"][0]["actions"][0]["text"].replace("right_gripper", "human")
+    bad["subtasks"][0]["text"] = bad["subtasks"][0]["actions"][0]["text"]
+    assert_fail("subject 非法时报错", bad)
 
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [twist_action])]))
     bad["subtasks"][0]["actions"][0]["slots"]["rotation_direction"] = "left"

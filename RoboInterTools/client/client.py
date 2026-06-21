@@ -190,6 +190,7 @@ class TextInputDialog(QDialog):
         widgets = {}
         skill_config = SKILL_TEMPLATES.get(skill_id, SKILL_TEMPLATES[DEFAULT_SKILL_ID])
         enum_constraints = skill_config.get("enum_constraints", {})
+        enum_display_names = skill_config.get("enum_display_names", {})
         slot_display_names = skill_config.get("slot_display_names", {})
         ui_template = skill_config.get("ui_template") or skill_config["template"]
         parts = re.split(r"(\[[^\]]+\])", ui_template)
@@ -207,9 +208,15 @@ class TextInputDialog(QDialog):
             placeholder = slot_display_names.get(slot, slot)
             if slot in enum_constraints:
                 widget = QComboBox(self)
-                widget.addItems(enum_constraints[slot])
+                display_names = enum_display_names.get(slot, {})
+                for value in enum_constraints[slot]:
+                    label = display_names.get(value, value)
+                    widget.addItem(f"{label} ({value})", value)
                 if values.get(slot):
-                    widget.setCurrentText(values[slot])
+                    for idx in range(widget.count()):
+                        if widget.itemData(idx) == values[slot]:
+                            widget.setCurrentIndex(idx)
+                            break
                 widget.currentIndexChanged.connect(self.update_description_preview)
             else:
                 widget = QLineEdit(self)
@@ -256,7 +263,7 @@ class TextInputDialog(QDialog):
 
     def widget_value(self, widget):
         if isinstance(widget, QComboBox):
-            return widget.currentText()
+            return widget.itemData(widget.currentIndex()) or widget.currentText()
         return widget.text().strip()
 
     def collect_slot_values(self, widgets):
