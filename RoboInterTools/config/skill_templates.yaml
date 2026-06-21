@@ -1,0 +1,269 @@
+template_set_version: skill_templates_v1
+
+slot_display_names:
+  subject: 执行主体
+  manipulated_object: 被操作物体
+  source_anchor: 起始位置
+  destination_anchor: 目标位置
+  grasp_anchor: 抓取部位
+  grasp_method: 抓取方式
+  placement_relation: 放置关系
+  press_anchor: 按压部位
+  interaction_target: 交互目标
+  position_anchor: 位置
+  changed_object: 变化对象
+  state_change: 状态变化
+  push_anchor: 推动部位
+  pull_anchor: 拉动部位
+  twist_anchor: 旋转部位
+  rotation_direction: 旋转方向
+  substance: 倾倒物
+  source_container: 源容器
+  destination_container: 目标容器
+  fold_anchor: 折叠部位
+  support_surface: 支撑表面
+  insert_anchor: 插入口
+  tool_or_effector: 工具或末端
+  strike_anchor: 敲击部位
+  tool: 工具
+
+skills:
+  - id: transfer
+    display_name: 拿着物体移动
+    template: "[subject] transfer [manipulated_object] from [source_anchor] to [destination_anchor]"
+    ui_template: "[subject] 拿着 [manipulated_object] 从 [source_anchor] 移动到 [destination_anchor]"
+    required_slots:
+      - subject
+      - manipulated_object
+      - source_anchor
+      - destination_anchor
+    enum_constraints: {}
+    end_frame_definition: "物体到达目标区域并明显停止/减速的帧"
+
+  - id: pick
+    display_name: 抓起
+    template: "[subject] pick up [manipulated_object] from [source_anchor], grasp anchor [grasp_anchor], grasp method [grasp_method]"
+    ui_template: "[subject] 从 [source_anchor] 抓起 [manipulated_object]，抓取部位 [grasp_anchor]，抓取方式 [grasp_method]"
+    required_slots:
+      - subject
+      - manipulated_object
+      - source_anchor
+      - grasp_anchor
+      - grasp_method
+    enum_constraints: {}
+    end_frame_definition: "稳定夹取的帧"
+
+  - id: place
+    display_name: 放置
+    template: "[subject] place [manipulated_object] [placement_relation] [destination_anchor] and release it"
+    ui_template: "[subject] 将 [manipulated_object] 以 [placement_relation] 的关系放到 [destination_anchor] 并释放"
+    required_slots:
+      - subject
+      - manipulated_object
+      - placement_relation
+      - destination_anchor
+    enum_constraints:
+      placement_relation:
+        - "on"
+        - in
+        - into
+        - under
+        - beside
+        - near
+        - against
+        - hang_on
+        - back_to
+    end_frame_definition: "夹爪与物体接触关系消失的那一帧"
+
+  - id: press
+    display_name: 按压
+    template: "[subject] press [press_anchor] of [interaction_target] at [position_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [position_anchor] 按压 [interaction_target] 的 [press_anchor]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - press_anchor
+      - interaction_target
+      - position_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "目标被按下或状态变化生效的第一帧"
+
+  - id: push
+    display_name: 推动
+    template: "[subject] push [interaction_target] at [push_anchor] from [source_anchor] to/toward [destination_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [push_anchor] 推动 [interaction_target]，从 [source_anchor] 到/朝向 [destination_anchor]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - interaction_target
+      - push_anchor
+      - source_anchor
+      - destination_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "被推动对象开始发生明显位移的第一帧"
+
+  - id: pull
+    display_name: 拉动
+    template: "[subject] pull [interaction_target] at [pull_anchor] from [source_anchor] to/toward [destination_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [pull_anchor] 拉动 [interaction_target]，从 [source_anchor] 到/朝向 [destination_anchor]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - interaction_target
+      - pull_anchor
+      - source_anchor
+      - destination_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "被拉对象开始发生明显位移的第一帧"
+
+  - id: twist
+    display_name: 旋转
+    template: "[subject] twist [interaction_target] at [twist_anchor] [rotation_direction], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [twist_anchor] 以 [rotation_direction] 方向旋转 [interaction_target]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - interaction_target
+      - twist_anchor
+      - rotation_direction
+      - changed_object
+      - state_change
+    enum_constraints:
+      rotation_direction:
+        - clockwise
+        - counterclockwise
+    end_frame_definition: "目标开始发生明显旋转的第一帧"
+
+  - id: pour
+    display_name: 倾倒
+    template: "[subject] pour [substance] from [source_container] into [destination_container] by manipulating [manipulated_object], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 操作 [manipulated_object]，将 [substance] 从 [source_container] 倒入 [destination_container]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - substance
+      - source_container
+      - destination_container
+      - manipulated_object
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "液体或颗粒第一次离开源容器的帧"
+
+  - id: fold
+    display_name: 折叠
+    template: "[subject] fold [manipulated_object] at [fold_anchor] toward [destination_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [fold_anchor] 折叠 [manipulated_object]，朝向 [destination_anchor]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - manipulated_object
+      - fold_anchor
+      - destination_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "折痕形成或折叠状态稳定的帧"
+
+  - id: slide
+    display_name: 滑动
+    template: "[subject] slide [manipulated_object] on [support_surface] from [source_anchor] to [destination_anchor]"
+    ui_template: "[subject] 让 [manipulated_object] 在 [support_surface] 上从 [source_anchor] 滑动到 [destination_anchor]"
+    required_slots:
+      - subject
+      - manipulated_object
+      - support_surface
+      - source_anchor
+      - destination_anchor
+    enum_constraints: {}
+    end_frame_definition: "物体开始沿支撑面发生连续滑动的第一帧"
+
+  - id: insert
+    display_name: 插入
+    template: "[subject] insert [manipulated_object] into [destination_anchor] through [insert_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 将 [manipulated_object] 通过 [insert_anchor] 插入 [destination_anchor]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - manipulated_object
+      - destination_anchor
+      - insert_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "物体进入孔/槽/容器并保持插入关系的第一帧"
+
+  - id: shake
+    display_name: 摇晃
+    template: "[subject] shake [manipulated_object] at [position_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [position_anchor] 摇晃 [manipulated_object]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - manipulated_object
+      - position_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "第一次明显往复摇晃开始的帧"
+
+  - id: strike
+    display_name: 敲击
+    template: "[subject] strike [interaction_target] at [strike_anchor] with [tool_or_effector], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 用 [tool_or_effector] 敲击 [interaction_target] 的 [strike_anchor]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - interaction_target
+      - strike_anchor
+      - tool_or_effector
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "工具/末端与目标发生有效撞击的帧"
+
+  - id: throw
+    display_name: 抛出
+    template: "[subject] throw [manipulated_object] toward [destination_anchor] and release it during motion"
+    ui_template: "[subject] 将 [manipulated_object] 朝 [destination_anchor] 抛出，并在运动中释放"
+    required_slots:
+      - subject
+      - manipulated_object
+      - destination_anchor
+    enum_constraints: {}
+    end_frame_definition: "夹爪释放物体的帧"
+
+  - id: navigate
+    display_name: 移动/导航
+    template: "[subject] move from [source_anchor] to [destination_anchor]"
+    ui_template: "[subject] 从 [source_anchor] 移动到 [destination_anchor]"
+    required_slots:
+      - subject
+      - source_anchor
+      - destination_anchor
+    enum_constraints: {}
+    end_frame_definition: "到达目标位置并停止/明显减速的帧"
+
+  - id: wipe_scrub
+    display_name: 擦拭/刷洗
+    template: "[subject] scrub/wipe [interaction_target] with [tool] at [position_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [position_anchor] 用 [tool] 擦拭/刷洗 [interaction_target]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - interaction_target
+      - tool
+      - position_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "有效擦拭/刷洗开始，或清洁状态变化的关键帧"
+
+  - id: manipulate
+    display_name: 其他操作
+    template: "[subject] manipulate [interaction_target] at [position_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 在 [position_anchor] 操作 [interaction_target]，使 [changed_object] [state_change]"
+    required_slots:
+      - subject
+      - interaction_target
+      - position_anchor
+      - changed_object
+      - state_change
+    enum_constraints: {}
+    end_frame_definition: "人工指定关键状态变化帧"
