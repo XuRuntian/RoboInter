@@ -4,33 +4,72 @@ coordination_modes:
     meaning: 单个执行主体独立完成一个动作
     main_skill_rule: actions[0].skill
     action_rule: 一个 action，通常是一只手或一个夹爪完成主要动作
+    allowed_primary_subjects:
+      - left_gripper
+      - right_gripper
+      - base
+      - robot_body
+      - left_arm
+      - right_arm
+      - unknown
 
   - id: both_same_skill_same_object
     display_name: 双手同技能同对象
     meaning: 双手同一技能，操作同一对象
     main_skill_rule: 共同 skill
     action_rule: 两个 action，skill 相同，核心对象相同
+    allowed_primary_subjects:
+      - both_grippers
+      - both_arms
+      - left_gripper
+      - right_gripper
+      - left_arm
+      - right_arm
 
   - id: both_same_skill_different_objects
     display_name: 双手同技能不同对象
     meaning: 双手同一技能，分别操作不同对象
     main_skill_rule: 共同 skill
     action_rule: 两个 action，skill 相同，核心对象不同
+    allowed_primary_subjects:
+      - left_gripper
+      - right_gripper
+      - left_arm
+      - right_arm
+      - unknown
 
   - id: primary_with_support
     display_name: 主手操作+辅助手支持
     meaning: 一只手主操作，另一只手辅助固定/扶持
     main_skill_rule: 主动作 skill
     action_rule: 主手 action 决定 subtask skill；辅助手作为 secondary action
+    allowed_primary_subjects:
+      - left_gripper
+      - right_gripper
+      - left_arm
+      - right_arm
+      - unknown
 
   - id: parallel_different_skills
     display_name: 双手不同技能并行
     meaning: 双手不同技能并行发生
     main_skill_rule: 主要语义目标的 skill
     action_rule: 两个 action，skill 不同；另一只手作为 secondary action
+    allowed_primary_subjects:
+      - left_gripper
+      - right_gripper
+      - left_arm
+      - right_arm
+      - unknown
 
   - id: handover_or_regrasp
     display_name: 交接/换手/重新抓握
     meaning: 双手之间交接/换手/重新抓握
     main_skill_rule: Transfer 或 Pick，按语义定
     action_rule: 可拆成双手相关 actions；主 skill 在 transfer / pick 中按语义选择
+    allowed_primary_subjects:
+      - left_gripper
+      - right_gripper
+      - left_arm
+      - right_arm
+      - unknown

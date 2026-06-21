@@ -261,10 +261,52 @@ def validate_subtask(subtask, skill_templates, coordination_modes, prefix="subta
         if error:
             return error
 
+    primary_subject = actions[0].get("subject")
+    allowed_primary_subjects = coordination_modes[coordination_mode].get("allowed_primary_subjects")
+    if allowed_primary_subjects and primary_subject not in allowed_primary_subjects:
+        return (
+            f"{prefix} coordination_mode={coordination_mode} "
+            f"不允许 primary subject={primary_subject}"
+        )
+
+    if coordination_mode == "both_same_skill_same_object":
+        error = validate_both_same_skill_same_object(actions, prefix)
+        if error:
+            return error
+
     expected_text = render_subtask_text(actions)
     if subtask.get("text") != expected_text:
         return f"{prefix} text 必须等于 actions[].text 自动拼接结果"
 
+    return None
+
+
+def validate_both_same_skill_same_object(actions, prefix):
+    subjects = [action.get("subject") for action in actions]
+    if len(actions) == 1:
+        if subjects[0] not in ("both_grippers", "both_arms"):
+            return (
+                f"{prefix} both_same_skill_same_object 单 action 时 "
+                "subject 必须是 both_grippers 或 both_arms"
+            )
+        return None
+
+    if len(actions) != 2:
+        return f"{prefix} both_same_skill_same_object 只允许 1 个 both action 或 2 个左右 action"
+
+    subject_set = set(subjects)
+    valid_subject_pairs = [
+        {"left_gripper", "right_gripper"},
+        {"left_arm", "right_arm"},
+    ]
+    if subject_set not in valid_subject_pairs:
+        return (
+            f"{prefix} both_same_skill_same_object 双 action 时 "
+            "subject 必须是 left_gripper+right_gripper 或 left_arm+right_arm"
+        )
+
+    if actions[0].get("skill") != actions[1].get("skill"):
+        return f"{prefix} both_same_skill_same_object 双 action 的 skill 必须相同"
     return None
 
 

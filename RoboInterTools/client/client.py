@@ -94,10 +94,8 @@ class TextInputDialog(QDialog):
 
         self.coordination_select = QComboBox()
         self.coordination_select.setFixedSize(400, 30)
-        for mode_id, mode in COORDINATION_MODES.items():
-            self.coordination_select.addItem(mode.get("display_name", mode_id), mode_id)
         coord_mode = subtask.get("coordination_mode") or DEFAULT_COORDINATION_MODE
-        self.set_combo_by_data(self.coordination_select, coord_mode)
+        self.populate_coordination_combo(coord_mode, primary_action.get("subject"))
 
         self.template_preview = QTextEdit(self)
         self.template_preview.setReadOnly(True)
@@ -152,6 +150,7 @@ class TextInputDialog(QDialog):
 
         self.render_primary_slots(selected_skill, self.primary_initial_values)
         self.render_secondary_slots(self.combo_data(self.secondary_skill_select), self.secondary_initial_values)
+        self.update_coordination_options()
         self.on_secondary_toggled()
         self.update_description_preview()
 
@@ -160,6 +159,25 @@ class TextInputDialog(QDialog):
             skill_id = skill["id"]
             combo.addItem(f'{skill.get("display_name", skill_id)} ({skill_id})', skill_id)
         self.set_combo_by_data(combo, current_skill)
+
+    def populate_coordination_combo(self, current_mode=None, primary_subject=None):
+        current_mode = current_mode or self.combo_data(self.coordination_select) or DEFAULT_COORDINATION_MODE
+        self.coordination_select.blockSignals(True)
+        self.coordination_select.clear()
+        for mode_id, mode in COORDINATION_MODES.items():
+            if self.coordination_mode_allows_subject(mode_id, primary_subject):
+                self.coordination_select.addItem(mode.get("display_name", mode_id), mode_id)
+        if self.coordination_select.count() == 0:
+            for mode_id, mode in COORDINATION_MODES.items():
+                self.coordination_select.addItem(mode.get("display_name", mode_id), mode_id)
+        self.set_combo_by_data(self.coordination_select, current_mode)
+        self.coordination_select.blockSignals(False)
+
+    def coordination_mode_allows_subject(self, mode_id, subject):
+        if not subject:
+            return True
+        allowed_subjects = COORDINATION_MODES.get(mode_id, {}).get("allowed_primary_subjects")
+        return not allowed_subjects or subject in allowed_subjects
 
     def set_combo_by_data(self, combo, value):
         for idx in range(combo.count()):
@@ -217,7 +235,10 @@ class TextInputDialog(QDialog):
                         if widget.itemData(idx) == values[slot]:
                             widget.setCurrentIndex(idx)
                             break
-                widget.currentIndexChanged.connect(self.update_description_preview)
+                if slot == "subject":
+                    widget.currentIndexChanged.connect(self.on_primary_subject_changed)
+                else:
+                    widget.currentIndexChanged.connect(self.update_description_preview)
             else:
                 widget = QLineEdit(self)
                 widget.setPlaceholderText(placeholder)
@@ -248,6 +269,7 @@ class TextInputDialog(QDialog):
         skill_id = self.combo_data(self.skill_select)
         self.primary_initial_values = {}
         self.render_primary_slots(skill_id)
+        self.update_coordination_options()
         self.update_description_preview()
 
     def on_secondary_skill_changed(self):
@@ -259,6 +281,19 @@ class TextInputDialog(QDialog):
         enabled = self.secondary_enable.isChecked()
         self.secondary_skill_select.setVisible(enabled)
         self.set_layout_visible(self.secondary_slots_layout, enabled)
+        self.update_description_preview()
+
+    def current_primary_subject(self):
+        subject_widget = self.slot_widgets.get("subject")
+        if subject_widget is None:
+            return None
+        return self.widget_value(subject_widget)
+
+    def update_coordination_options(self):
+        self.populate_coordination_combo(primary_subject=self.current_primary_subject())
+
+    def on_primary_subject_changed(self):
+        self.update_coordination_options()
         self.update_description_preview()
 
     def widget_value(self, widget):

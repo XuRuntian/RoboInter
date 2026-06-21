@@ -57,6 +57,12 @@ def pull_values():
     }
 
 
+def both_pull_values():
+    values = pull_values()
+    values["subject"] = "both_grippers"
+    return values
+
+
 def pick_values():
     return {
         "subject": "left_gripper",
@@ -64,6 +70,23 @@ def pick_values():
         "source_anchor": "table",
         "grasp_anchor": "cup body",
         "grasp_method": "pinch",
+    }
+
+
+def right_pick_values():
+    values = pick_values()
+    values["subject"] = "right_gripper"
+    return values
+
+
+def fold_values(subject, fold_anchor, state_change):
+    return {
+        "subject": subject,
+        "manipulated_object": "shirt",
+        "fold_anchor": fold_anchor,
+        "destination_anchor": "shirt center",
+        "changed_object": "shirt",
+        "state_change": state_change,
     }
 
 
@@ -152,6 +175,29 @@ def main():
     assert_ok(
         "single_hand 下单 action 可以保存",
         annotation([subtask(0, 10, "single_hand", [base_pull])]),
+    )
+    both_pull = action("pull", both_pull_values())
+    assert_ok(
+        "both_grippers 允许 both_same_skill_same_object",
+        annotation([subtask(0, 10, "both_same_skill_same_object", [both_pull])]),
+    )
+    left_fold = action("fold", fold_values("left_gripper", "left sleeve", "left sleeve folded"))
+    right_fold = action("fold", fold_values("right_gripper", "right sleeve", "right sleeve folded"))
+    assert_ok(
+        "left_gripper+right_gripper 允许 both_same_skill_same_object",
+        annotation([subtask(0, 10, "both_same_skill_same_object", [left_fold, right_fold])]),
+    )
+    assert_fail(
+        "both_grippers 不允许 single_hand",
+        annotation([subtask(0, 10, "single_hand", [both_pull])]),
+    )
+    assert_fail(
+        "单侧 gripper 单 action 不允许 both_same_skill_same_object",
+        annotation([subtask(0, 10, "both_same_skill_same_object", [base_pull])]),
+    )
+    assert_fail(
+        "both_same_skill_same_object 双 action 的 skill 必须相同",
+        annotation([subtask(0, 10, "both_same_skill_same_object", [left_fold, action("pick", right_pick_values())])]),
     )
     assert_ok(
         "parallel_different_skills 下两个 action 可以保存",
