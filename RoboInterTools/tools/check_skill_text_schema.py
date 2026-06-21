@@ -79,12 +79,13 @@ def right_pick_values():
     return values
 
 
-def fold_values(subject, fold_anchor, state_change):
+def fold_values(subject, folded_part_anchor, state_change):
     return {
         "subject": subject,
         "manipulated_object": "shirt",
-        "fold_anchor": fold_anchor,
-        "destination_anchor": "shirt center",
+        "folded_part_anchor": folded_part_anchor,
+        "fold_line_anchor": "sleeve seam",
+        "fold_target_anchor": "shirt center",
         "changed_object": "shirt",
         "state_change": state_change,
     }

@@ -21,6 +21,9 @@ slot_display_names:
   source_container: 源容器
   destination_container: 目标容器
   fold_anchor: 折叠部位
+  folded_part_anchor: 被折叠部位
+  fold_line_anchor: 折线/折叠线
+  fold_target_anchor: 折叠目标位置
   support_surface: 支撑表面
   insert_anchor: 插入口
   tool_or_effector: 工具或末端
@@ -190,13 +193,14 @@ skills:
 
   - id: fold
     display_name: 折叠
-    template: "[subject] fold [manipulated_object] at [fold_anchor] toward [destination_anchor], causing [changed_object] to [state_change]"
-    ui_template: "[subject] 在 [fold_anchor] 折叠 [manipulated_object]，朝向 [destination_anchor]，使 [changed_object] [state_change]"
+    template: "[subject] fold [folded_part_anchor] of [manipulated_object] along [fold_line_anchor] toward/onto [fold_target_anchor], causing [changed_object] to [state_change]"
+    ui_template: "[subject] 将 [manipulated_object] 的 [folded_part_anchor] 沿 [fold_line_anchor] 向/到 [fold_target_anchor] 折叠，使 [changed_object] [state_change]"
     required_slots:
       - subject
       - manipulated_object
-      - fold_anchor
-      - destination_anchor
+      - folded_part_anchor
+      - fold_line_anchor
+      - fold_target_anchor
       - changed_object
       - state_change
     enum_constraints: {}
