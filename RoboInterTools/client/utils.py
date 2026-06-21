@@ -113,7 +113,16 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
             if "anno.npz" in zf.namelist():
                 with zf.open("anno.npz") as f:
                     anno_data = np.load(f, allow_pickle=True)['anno_file']
-                    anno = pickle.loads(anno_data)
+                    if hasattr(anno_data, "shape") and anno_data.shape == ():
+                        anno_data = anno_data.item()
+                    if isinstance(anno_data, (bytes, bytearray)):
+                        anno = pickle.loads(anno_data)
+                    elif isinstance(anno_data, dict):
+                        anno = anno_data
+                    elif hasattr(anno_data, "item"):
+                        anno = anno_data.item()
+                    else:
+                        anno = anno_data
 
     frames = []
     reader = imageio.get_reader(video, "mp4")
@@ -128,7 +137,7 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
         return np.stack(frames), anno, save_path, video_path, history_number
 
 
-def save_anno(ip, port, save_path, anno):
+def save_anno(ip, port, save_path, anno, metadata=None):
     """Save annotation result to server.
 
     Args:
@@ -136,6 +145,7 @@ def save_anno(ip, port, save_path, anno):
         port: Server port
         save_path: Where the server should save the annotation
         anno: Annotation dict to save
+        metadata: Optional form metadata that is not stored in anno
 
     Returns:
         True on success, False on error.
@@ -149,6 +159,8 @@ def save_anno(ip, port, save_path, anno):
         "file": ("anno.npz", anno_bytes, "application/octet-stream"),
         "save_path": (None, save_path),
     }
+    for key, value in (metadata or {}).items():
+        files[key] = (None, "" if value is None else str(value))
     response = requests.post(url, files=files)
     if response.status_code == 200:
         return True

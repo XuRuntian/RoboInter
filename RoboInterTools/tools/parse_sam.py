@@ -13,6 +13,7 @@ import argparse
 from sam import Sam
 
 UPDATE_VIDEO_LIST = []
+PROCESSED_INPUT_VIDEO_LIST = []
 FINISHED_VIDEO_LIST = []
 HARD_SAMPLE_LIST = []
 QUESTION_SAMPLE_LIST = []
@@ -49,6 +50,53 @@ def resolve_path(root_dir, template, **kwargs):
     return os.path.join(root_dir, template.format(**kwargs))
 
 
+def resolve_saved_path(root_dir, path):
+    if os.path.isabs(path):
+        return path
+    return os.path.join(root_dir, path)
+
+
+def load_sam_save_path_index(path_cfg):
+    save_path_index = {}
+    for pool_path in (path_cfg["has_annotation_sam"], path_cfg["no_annotation_sam"]):
+        if not os.path.exists(pool_path):
+            continue
+        try:
+            with open(pool_path) as f:
+                pool = json.load(f)
+        except Exception:
+            continue
+        for user_items in pool.values():
+            for video_path, item in user_items.items():
+                save_path = item.get("save_path")
+                if save_path:
+                    save_path_index[video_path] = resolve_saved_path(path_cfg["root_dir"], save_path)
+    return save_path_index
+
+
+def resolve_model_config_path(line, path_cfg, time, save_path_index):
+    indexed_path = save_path_index.get(line)
+    if indexed_path:
+        return indexed_path
+
+    video_name = os.path.basename(line)
+    video_name_no_ext = os.path.splitext(video_name)[0]
+    return resolve_path(path_cfg["root_dir"], path_cfg["save_path_sam_tpl"], time=time, video_name=video_name_no_ext)
+
+
+def resolve_origin_video_path(model_config, path_cfg, model_video_name_no_ext, line):
+    candidate_paths = [
+        os.path.join(path_cfg["video_dir"], f"{model_video_name_no_ext}.mp4"),
+        os.path.join(path_cfg["video_dir"], os.path.basename(model_config.get("video_path", line))),
+        model_config.get("video_path", ""),
+        line,
+    ]
+    for candidate_path in candidate_paths:
+        if candidate_path and os.path.exists(candidate_path):
+            return candidate_path
+    return candidate_paths[0]
+
+
 def extract_frames(video_path):
     video = cv2.VideoCapture(video_path)
     frames = []
@@ -57,6 +105,11 @@ def extract_frames(video_path):
         frames.append(frame)
         success, frame = video.read()
     video.release()
+    if not frames:
+        raise RuntimeError(
+            f"OpenCV cannot decode any frame from {video_path}. "
+            "Please transcode the video to H.264/mp4 first."
+        )
     return np.array(frames)
 
 
@@ -89,7 +142,7 @@ def load_new_config(path):
     return pickle.loads(np.load(path)['arr_0'])
 
 
-def check_person(model_sam, path_cfg, user_name, time):
+def check_person(model_sam, path_cfg, user_name, time, save_path_index):
     user_history_path = os.path.join(path_cfg["user_sam_dir"], user_name + ".txt")
     if time > 0:
         user_history_path = user_history_path.replace(".txt", f"_{time}.txt")
@@ -100,24 +153,23 @@ def check_person(model_sam, path_cfg, user_name, time):
 
     with open(user_history_path) as f:
         user_ann_list = f.readlines()
-    user_ann_list = [line.strip() for line in user_ann_list]
+    user_ann_list = [line.strip() for line in user_ann_list if line.strip()]
     for line in tqdm(user_ann_list, desc=f"Parsing {user_name} with time {time}"):
-        parse_and_save_results(line, model_sam, path_cfg, user_name, time, skip=False)
+        parse_and_save_results(line, model_sam, path_cfg, user_name, time, save_path_index, skip=False)
 
 
-def check_item(video_path, model_sam, path_cfg, user, time):
-    parse_and_save_results(video_path, model_sam, path_cfg, user, time)
+def check_item(video_path, model_sam, path_cfg, user, time, save_path_index):
+    parse_and_save_results(video_path, model_sam, path_cfg, user, time, save_path_index)
 
 
-def parse_and_save_results(line, model_sam, path_cfg, user, time, skip=False):
+def parse_and_save_results(line, model_sam, path_cfg, user, time, save_path_index, skip=False):
     root_dir = path_cfg["root_dir"]
     error_log = path_cfg["error_log"]
-    video_name = line.split("/")[-1]
-    video_name_no_ext = video_name.replace(".mp4", "")
+    model_config_path = resolve_model_config_path(line, path_cfg, time, save_path_index)
+    video_name_no_ext = os.path.splitext(os.path.basename(model_config_path))[0]
 
     video_save_path = resolve_path(root_dir, path_cfg["sam_video_save_tpl"], time=time, video_name=video_name_no_ext)
     sam_save_path = resolve_path(root_dir, path_cfg["sam_mask_save_tpl"], time=time, video_name=video_name_no_ext)
-    model_config_path = resolve_path(root_dir, path_cfg["save_path_sam_tpl"], time=time, video_name=video_name_no_ext)
 
     # Skip if next annotation round already exists
     # sam_next_time_path = resolve_path(root_dir, path_cfg["save_path_sam_tpl"], time=time + 1, video_name=video_name_no_ext)
@@ -161,8 +213,7 @@ def parse_and_save_results(line, model_sam, path_cfg, user, time, skip=False):
                 QUESTION_SAMPLE_LIST.append(model_config["video_path"])
             return
 
-    origin_video_name = model_config["video_path"].split("/")[-1]
-    model_config["origin_video_path"] = os.path.join(path_cfg["video_dir"], origin_video_name)
+    model_config["origin_video_path"] = resolve_origin_video_path(model_config, path_cfg, video_name_no_ext, line)
 
     try:
         if time == 0:
@@ -194,6 +245,7 @@ def parse_and_save_results(line, model_sam, path_cfg, user, time, skip=False):
     result.release()
 
     UPDATE_VIDEO_LIST.append(video_save_path)
+    PROCESSED_INPUT_VIDEO_LIST.append(line)
 
     return
 
@@ -207,8 +259,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg, path_cfg = load_path_config(args.config)
-    os.makedirs(os.path.dirname(path_cfg['sam_mask_save_tpl'].format(time=args.time, video_name='tmp')), exist_ok=True)
-    os.makedirs(os.path.dirname(path_cfg['sam_video_save_tpl'].format(time=args.time, video_name='tmp')), exist_ok=True)
+    root_dir = path_cfg["root_dir"]
+    os.makedirs(os.path.dirname(resolve_path(root_dir, path_cfg['sam_mask_save_tpl'], time=args.time, video_name='tmp')), exist_ok=True)
+    os.makedirs(os.path.dirname(resolve_path(root_dir, path_cfg['sam_video_save_tpl'], time=args.time, video_name='tmp')), exist_ok=True)
     
     sam_config = cfg["sam"]
 
@@ -222,11 +275,10 @@ if __name__ == "__main__":
         False,
         sam_config["device"],
     )
-    check_person(model_sam, path_cfg, args.username, args.time)
+    save_path_index = load_sam_save_path_index(path_cfg)
+    check_person(model_sam, path_cfg, args.username, args.time, save_path_index)
 
     # === Post-processing: update annotation pool JSONs ===
-    root_dir = path_cfg["root_dir"]
-
     # 1. Add processed videos to no_annotation_sam (queue for next round)
     add_file_number = 0
     with open(path_cfg["no_annotation_sam"], "r+") as f:
@@ -257,7 +309,7 @@ if __name__ == "__main__":
     with open(path_cfg["has_annotation_sam"], "r+") as f:
         portalocker.lock(f, portalocker.LOCK_EX)
         has_annotation = json.load(f)
-        for video_path in UPDATE_VIDEO_LIST:
+        for video_path in PROCESSED_INPUT_VIDEO_LIST:
             if video_path in has_annotation.get(args.username, {}):
                 del has_annotation[args.username][video_path]
                 delete_file_number += 1

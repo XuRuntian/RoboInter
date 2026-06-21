@@ -1,6 +1,7 @@
 import sys
 import os
 import argparse
+import re
 from PyQt5.QtCore import QPoint, QTimer, Qt
 import cv2
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, QMessageBox, QLineEdit, QDialogButtonBox, QTextEdit, QGridLayout,
@@ -12,118 +13,342 @@ import yaml, time
 from utils import request_video_and_anno, save_anno, drawback_video, get_avaiable_username
 import numpy as np
 
-BASE_CLIP_DES = ['拿着[某物体]从[某位置1]移动到[某位置2]', '在[某位置]抓起[某物体]', '把[某物体]放置到[某位置]', '在[某位置]按压[某物体]', '把[某物体]推到[某位置]', '把[某物体]拉到[某位置]', '[顺时针/逆时针]转动[某物体]',  '把[某物体]倒到[某位置]', '在[某位置]折叠[某物体]', '在[某位置]滑动[某物体]', '把[某物体]插入到[某位置]', '在[某位置]摇动[某物体]', '在[某位置]敲击[某物体]', '把[某物体]扔到[某位置]', '在[某位置]操作[某物体]']
-BASE_PRIM = ['拿着物体移动','抓起','放下','按压','推动','拉动','转动','倾倒','折叠','滑动','插入','摇动','敲击','扔掉','其余操作']
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
+from skill_schema import (
+    SCHEMA_VERSION,
+    TEMPLATE_SET_VERSION,
+    build_action_from_slot_values,
+    load_coordination_modes,
+    load_skill_templates,
+    render_subtask_text,
+    validate_subtask,
+)
+
+
+TEMPLATE_SET_VERSION, SKILL_TEMPLATES = load_skill_templates()
+COORDINATION_MODES = load_coordination_modes()
+SKILL_LIST = list(SKILL_TEMPLATES.values())
+DEFAULT_SKILL_ID = "manipulate" if "manipulate" in SKILL_TEMPLATES else SKILL_LIST[-1]["id"]
+DEFAULT_COORDINATION_MODE = (
+    "single_hand"
+    if "single_hand" in COORDINATION_MODES
+    else "primary_with_support"
+    if "primary_with_support" in COORDINATION_MODES
+    else next(iter(COORDINATION_MODES))
+)
+
+
+def get_subtask_display(subtask):
+    if not isinstance(subtask, dict):
+        return "", "", ""
+    actions = subtask.get("actions") or []
+    primary_skill = actions[0].get("skill", "") if actions else ""
+    return subtask.get("text", ""), primary_skill, ""
+
 
 class TextInputDialog(QDialog):
-    
+
     def __init__(self, initial_text='', parent=None, is_video=True, video_anno_json=None, origin_text=None):
         super().__init__(parent)
         self.setWindowTitle('请输入语言标注')
         self.setFocusPolicy(Qt.StrongFocus)
         self.is_video = is_video
+        self.video_anno_json = video_anno_json or {}
+        self.clip_result = None
+        self.slot_widgets = {}
+        self.secondary_slot_widgets = {}
         self.main_layout = QGridLayout(self)
         self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self.button_box.button(QDialogButtonBox.Ok).setText("确定")
         self.button_box.button(QDialogButtonBox.Cancel).setText("取消")
-        self.language_edit = QTextEdit()
-        self.language_title = QLabel('请确认原子动作:', self)
-        self.language_title.hide()
-        self.mode_title = QLabel('请选择原子动作:', self)
-        self.mode_select = QComboBox()
-        self.mode_title.hide()
-        self.mode_select.hide()
-        
-        if not is_video:
-            global_instruction_C = video_anno_json['instructionC']
-            clip_lang_C_options = video_anno_json['task_stepsC']
-            task_stepsC_list = video_anno_json['task_stepsC_list']
-            
-            self.prim_title = QLabel('请选择语言预标注:', self)
-            self.prim_select = QComboBox()
-            self.prim_select.setFixedSize(400, 30)
-            self.mode_title.show()
-            self.mode_select.show()
-            clip_des = [i for i in task_stepsC_list if clip_lang_C_options[i] is None or i == origin_text] + ['空']
-            primitive_action_options_C = [video_anno_json['action_stepsC'][idx] for idx, i in enumerate(task_stepsC_list) if clip_lang_C_options[i] is None or i == origin_text] + ['空']
-            
-            self.prim_select.addItems(clip_des)
-            self.prim_select.insertSeparator(len(clip_des))
-            self.prim_select.addItems(BASE_CLIP_DES)
-            self.prim_select.setMaxVisibleItems(30)            
-            
-            self.mode_select.setFixedSize(400, 30)
-            self.mode_select.addItems(primitive_action_options_C)
-            # 添加分割线
-            self.mode_select.insertSeparator(len(primitive_action_options_C))
-            self.mode_select.addItems(BASE_PRIM)
-            self.mode_select.setCurrentIndex(-1)
-            self.mode_select.setMaxVisibleItems(30)
-            
-            
-            if origin_text and len(origin_text) > 0:
-                # self.prim_select.addItems([initial_action])
-                self.prim_select.setCurrentText(origin_text)
-                self.language_select(clip_des)
-            else:
-                self.prim_select.setCurrentIndex(-1)
-            
-            if initial_text is not None and len(initial_text) > 0:
-                self.language_edit.setText(initial_text)
-            else:
-                self.language_edit.hide()
-                self.language_edit.setText('')
-            
-            self.language_edit.setFixedSize(400, 150)
-            self.prim_select.currentIndexChanged.connect(lambda: self.language_select(clip_des))
-            self.main_layout.addWidget(self.language_edit, 2, 1)
-            self.main_layout.addWidget(self.language_title, 2, 0)
-            self.main_layout.addWidget(self.mode_title, 1, 0)
-            self.main_layout.addWidget(self.mode_select, 1, 1)
-            self.main_layout.addWidget(self.prim_title, 0, 0)
-            self.main_layout.addWidget(self.prim_select, 0, 1)
-            self.main_layout.addWidget(self.button_box, 3, 0, 1, 2)
-        else:
-            global_instruction_C = video_anno_json['instructionC']
+
+        if is_video:
+            global_instruction_C = self.video_anno_json.get('instructionC', '')
             self.text_title = QLabel('输入语言标注:', self)
             self.text_input = QPlainTextEdit(self)
             self.text_input.setPlainText(global_instruction_C if initial_text is None or len(initial_text) == 0 else initial_text)
-            self.text_input.setFixedSize(500,50)
-            # self.text_input.setWordWrap(True)
-            # self.text_input.setPlainText(initial_text)
+            self.text_input.setFixedSize(500, 50)
             self.main_layout.addWidget(self.text_title, 0, 0)
             self.main_layout.addWidget(self.text_input, 0, 1)
             self.main_layout.addWidget(self.button_box, 1, 0, 1, 2)
-                
+        else:
+            self.initial_clip = initial_text
+            self.build_clip_ui(initial_text)
+
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
-        
+
+    def build_clip_ui(self, initial_clip):
+        subtask = initial_clip if isinstance(initial_clip, dict) else {}
+        actions = subtask.get("actions") or []
+        primary_action = actions[0] if actions else {}
+        secondary_action = actions[1] if len(actions) > 1 else {}
+        selected_skill = primary_action.get("skill") or DEFAULT_SKILL_ID
+
+        self.skill_select = QComboBox()
+        self.skill_select.setFixedSize(400, 30)
+        self.populate_skill_combo(self.skill_select, selected_skill)
+
+        self.coordination_select = QComboBox()
+        self.coordination_select.setFixedSize(400, 30)
+        for mode_id, mode in COORDINATION_MODES.items():
+            self.coordination_select.addItem(mode.get("display_name", mode_id), mode_id)
+        coord_mode = subtask.get("coordination_mode") or DEFAULT_COORDINATION_MODE
+        self.set_combo_by_data(self.coordination_select, coord_mode)
+
+        self.template_preview = QTextEdit(self)
+        self.template_preview.setReadOnly(True)
+        self.template_preview.setFixedSize(760, 55)
+        self.template_preview.setStyleSheet("background-color: #E3E3E3;")
+
+        self.description_preview = QTextEdit(self)
+        self.description_preview.setReadOnly(True)
+        self.description_preview.setFixedSize(760, 70)
+        self.description_preview.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+
+        self.primary_slots_layout = QHBoxLayout()
+        self.secondary_enable = QCheckBox("添加辅助动作", self)
+        self.secondary_skill_select = QComboBox()
+        self.secondary_skill_select.setFixedSize(400, 30)
+        self.populate_skill_combo(self.secondary_skill_select, secondary_action.get("skill") or selected_skill)
+        self.secondary_slots_layout = QHBoxLayout()
+
+        row = 0
+        self.main_layout.addWidget(QLabel("选择技能:", self), row, 0)
+        self.main_layout.addWidget(self.skill_select, row, 1)
+        row += 1
+        self.main_layout.addWidget(QLabel("协同方式:", self), row, 0)
+        self.main_layout.addWidget(self.coordination_select, row, 1)
+        row += 1
+        self.main_layout.addWidget(QLabel("动作提示:", self), row, 0)
+        self.main_layout.addWidget(self.template_preview, row, 1)
+        row += 1
+        self.main_layout.addWidget(QLabel("主动作填空:", self), row, 0)
+        self.main_layout.addLayout(self.primary_slots_layout, row, 1)
+        row += 1
+        self.main_layout.addWidget(self.secondary_enable, row, 0)
+        self.main_layout.addWidget(self.secondary_skill_select, row, 1)
+        row += 1
+        self.main_layout.addWidget(QLabel("辅助动作填空:", self), row, 0)
+        self.main_layout.addLayout(self.secondary_slots_layout, row, 1)
+        row += 1
+        self.main_layout.addWidget(QLabel("自动生成文本:", self), row, 0)
+        self.main_layout.addWidget(self.description_preview, row, 1)
+        row += 1
+        self.main_layout.addWidget(self.button_box, row, 0, 1, 2)
+
+        self.primary_initial_values = self.action_to_slot_values(primary_action)
+        self.secondary_initial_values = self.action_to_slot_values(secondary_action)
+        self.secondary_enable.setChecked(bool(secondary_action))
+        self.secondary_skill_select.setVisible(self.secondary_enable.isChecked())
+
+        self.skill_select.currentIndexChanged.connect(self.on_skill_changed)
+        self.secondary_skill_select.currentIndexChanged.connect(self.on_secondary_skill_changed)
+        self.coordination_select.currentIndexChanged.connect(self.update_description_preview)
+        self.secondary_enable.stateChanged.connect(self.on_secondary_toggled)
+
+        self.render_primary_slots(selected_skill, self.primary_initial_values)
+        self.render_secondary_slots(self.combo_data(self.secondary_skill_select), self.secondary_initial_values)
+        self.on_secondary_toggled()
+        self.update_description_preview()
+
+    def populate_skill_combo(self, combo, current_skill):
+        for skill in SKILL_LIST:
+            skill_id = skill["id"]
+            combo.addItem(f'{skill.get("display_name", skill_id)} ({skill_id})', skill_id)
+        self.set_combo_by_data(combo, current_skill)
+
+    def set_combo_by_data(self, combo, value):
+        for idx in range(combo.count()):
+            if combo.itemData(idx) == value:
+                combo.setCurrentIndex(idx)
+                return
+        combo.setCurrentIndex(0)
+
+    def combo_data(self, combo):
+        return combo.itemData(combo.currentIndex()) or combo.currentText()
+
+    def action_to_slot_values(self, action):
+        values = {}
+        if isinstance(action, dict):
+            values.update(action.get("slots") or {})
+            if action.get("subject"):
+                values["subject"] = action["subject"]
+        return values
+
+    def clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def create_slot_widgets(self, layout, skill_id, values):
+        widgets = {}
+        skill_config = SKILL_TEMPLATES.get(skill_id, SKILL_TEMPLATES[DEFAULT_SKILL_ID])
+        enum_constraints = skill_config.get("enum_constraints", {})
+        slot_display_names = skill_config.get("slot_display_names", {})
+        ui_template = skill_config.get("ui_template") or skill_config["template"]
+        parts = re.split(r"(\[[^\]]+\])", ui_template)
+        for part in parts:
+            if not part:
+                continue
+            slot_match = re.fullmatch(r"\[([^\]]+)\]", part)
+            if not slot_match:
+                label = QLabel(part, self)
+                label.setStyleSheet("font-weight: bold;")
+                layout.addWidget(label)
+                continue
+
+            slot = slot_match.group(1)
+            placeholder = slot_display_names.get(slot, slot)
+            if slot in enum_constraints:
+                widget = QComboBox(self)
+                widget.addItems(enum_constraints[slot])
+                if values.get(slot):
+                    widget.setCurrentText(values[slot])
+                widget.currentIndexChanged.connect(self.update_description_preview)
+            else:
+                widget = QLineEdit(self)
+                widget.setPlaceholderText(placeholder)
+                widget.setText(values.get(slot, ""))
+                widget.textChanged.connect(self.update_description_preview)
+            widget.setFixedSize(150 if slot != "subject" else 130, 30)
+            layout.addWidget(widget)
+            widgets[slot] = widget
+        return widgets
+
+    def render_primary_slots(self, skill_id, values=None):
+        self.clear_layout(self.primary_slots_layout)
+        self.slot_widgets = self.create_slot_widgets(self.primary_slots_layout, skill_id, values or {})
+
+    def render_secondary_slots(self, skill_id, values=None):
+        self.clear_layout(self.secondary_slots_layout)
+        self.secondary_slot_widgets = self.create_slot_widgets(self.secondary_slots_layout, skill_id, values or {})
+        self.set_layout_visible(self.secondary_slots_layout, self.secondary_enable.isChecked())
+
+    def set_layout_visible(self, layout, visible):
+        for idx in range(layout.count()):
+            item = layout.itemAt(idx)
+            widget = item.widget()
+            if widget is not None:
+                widget.setVisible(visible)
+
+    def on_skill_changed(self):
+        skill_id = self.combo_data(self.skill_select)
+        self.primary_initial_values = {}
+        self.render_primary_slots(skill_id)
+        self.update_description_preview()
+
+    def on_secondary_skill_changed(self):
+        self.secondary_initial_values = {}
+        self.render_secondary_slots(self.combo_data(self.secondary_skill_select))
+        self.update_description_preview()
+
+    def on_secondary_toggled(self):
+        enabled = self.secondary_enable.isChecked()
+        self.secondary_skill_select.setVisible(enabled)
+        self.set_layout_visible(self.secondary_slots_layout, enabled)
+        self.update_description_preview()
+
+    def widget_value(self, widget):
+        if isinstance(widget, QComboBox):
+            return widget.currentText()
+        return widget.text().strip()
+
+    def collect_slot_values(self, widgets):
+        return {slot: self.widget_value(widget) for slot, widget in widgets.items()}
+
+    def render_current_description(self):
+        skill_id = self.combo_data(self.skill_select)
+        actions = [self.build_action(skill_id, self.slot_widgets, allow_empty=True)]
+        if self.secondary_enable.isChecked():
+            secondary_skill = self.combo_data(self.secondary_skill_select)
+            actions.append(self.build_action(secondary_skill, self.secondary_slot_widgets, allow_empty=True))
+        return render_subtask_text(actions)
+
+    def update_description_preview(self):
+        if self.is_video:
+            return
+        skill_id = self.combo_data(self.skill_select)
+        skill_config = SKILL_TEMPLATES.get(skill_id, SKILL_TEMPLATES[DEFAULT_SKILL_ID])
+        ui_template = skill_config.get("ui_template") or skill_config["template"]
+        end_frame_definition = skill_config.get("end_frame_definition", "")
+        self.template_preview.setText(ui_template)
+        if end_frame_definition:
+            self.template_preview.setText(f"{ui_template}\n结束帧定义: {end_frame_definition}")
+        self.description_preview.setText(self.render_current_description())
+
+    def build_action(self, skill_id, widgets, allow_empty=False):
+        values = self.collect_slot_values(widgets)
+        return build_action_from_slot_values(
+            skill_id, values, SKILL_TEMPLATES, allow_empty=allow_empty
+        )
+
+    def build_clip_result(self):
+        skill_id = self.combo_data(self.skill_select)
+        actions = [self.build_action(skill_id, self.slot_widgets)]
+        if self.secondary_enable.isChecked():
+            secondary_skill = self.combo_data(self.secondary_skill_select)
+            actions.append(self.build_action(secondary_skill, self.secondary_slot_widgets))
+        return {
+            "coordination_mode": self.combo_data(self.coordination_select),
+            "text": render_subtask_text(actions),
+            "actions": actions,
+        }
+
+    def validate_action_widgets(self, skill_id, widgets, action_name):
+        skill_config = SKILL_TEMPLATES.get(skill_id, SKILL_TEMPLATES[DEFAULT_SKILL_ID])
+        for slot in skill_config.get("required_slots", []):
+            widget = widgets.get(slot)
+            if widget is None or not self.widget_value(widget):
+                return f"{action_name} 缺少必填 slot: {slot}"
+        return None
+
+    def validate_clip_inputs(self):
+        error = self.validate_action_widgets(self.combo_data(self.skill_select), self.slot_widgets, "primary action")
+        if error:
+            return error
+        if self.secondary_enable.isChecked():
+            return self.validate_action_widgets(
+                self.combo_data(self.secondary_skill_select),
+                self.secondary_slot_widgets,
+                "secondary action",
+            )
+        return None
+
+    def accept(self):
+        if not self.is_video:
+            error = self.validate_clip_inputs()
+            if error:
+                QMessageBox.warning(self, "提示", error)
+                return
+            try:
+                self.clip_result = self.build_clip_result()
+            except ValueError as exc:
+                QMessageBox.warning(self, "提示", str(exc))
+                return
+        super().accept()
+
     def get_text(self):
-        return self.language_edit.toPlainText() if not self.is_video else self.text_input.toPlainText()
-    
+        return self.text_input.toPlainText() if self.is_video else self.build_clip_result()["text"]
+
     def get_prim(self):
-        if not self.is_video:
-            return self.mode_select.currentText()
-        else:
+        if self.is_video:
             return ''
-    
+        actions = self.build_clip_result().get("actions") or []
+        return actions[0].get("skill", "") if actions else ""
+
     def get_select_lang(self):
-        if not self.is_video:
-            return self.prim_select.currentText()
-        else:
-            return ''
-    
-    def language_select(self, clip_des):
-        if not self.is_video:
-            self.language_title.show()
-            self.language_edit.show()
-            self.language_edit.setText(self.prim_select.currentText())
-            # if self.prim_select.currentText() == '空':
-            #     self.mode_select.setCurrentIndex(-1)
-            # else:
-            clip_lang_C_options_keys = clip_des + ['Sep'] + BASE_CLIP_DES
-            prim_idx_in_action = clip_lang_C_options_keys.index(self.prim_select.currentText())
-            self.mode_select.setCurrentIndex(prim_idx_in_action)
+        return ''
+
+    def get_structured_result(self):
+        if self.is_video:
+            return None
+        return self.clip_result or self.build_clip_result()
 
 
 class ObjectAnnotationDialog(QDialog):
@@ -565,6 +790,7 @@ class VideoPlayer(QWidget):
         self.lang_anno = dict()
         self.max_point_num = dict()
         self.video_2_lang = dict()
+        self.loaded_lang_annotation = None
         self.cur_frame_idx = self.progress_slider.value()
         self.keyframes = {} 
         self.selected_keyframe = None 
@@ -854,10 +1080,7 @@ class VideoPlayer(QWidget):
 
     def has_anno(self):
         if self.mode == '语言标注':
-            for i in self.lang_anno:
-                if i != (0, 0):
-                    return True
-            return False
+            return any(key != (0, 0) for key in self.lang_anno)
         else:
             for i in self.tracking_points_sam:
                 if len(self.tracking_points_sam[i][0]['pos']) > 0:
@@ -882,11 +1105,8 @@ class VideoPlayer(QWidget):
         all_object_size = len(self.tracking_points_sam[self.progress_slider.value()])
         self.sam_obj_pos_label.setText(f"标注物体: {cur_id}/{all_object_size}")   
         
-        if (0, 0) in self.lang_anno:
-            desc = self.lang_anno[(0, 0)]
-            self.video_lang_input.setText(f"视频描述: {desc}")
-        else:
-            self.video_lang_input.setText('')
+        video_text = self.lang_anno.get((0, 0), "")
+        self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
         
         anno_loc, (clip_text, prim, origin_text) = self.get_clip_description()
         anno_loc = anno_loc[1]
@@ -914,11 +1134,8 @@ class VideoPlayer(QWidget):
         all_object_size = len(self.tracking_points_sam[self.progress_slider.value()])
         self.sam_obj_pos_label.setText(f"物体标注: {cur_id}/{all_object_size}")
         
-        if (0, 0) in self.lang_anno:
-            desc = self.lang_anno[(0, 0)]
-            self.video_lang_input.setText(f"视频描述: {desc}")
-        else:
-            self.video_lang_input.setText('')
+        video_text = self.lang_anno.get((0, 0), "")
+        self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
         
         anno_loc, (clip_text, prim, origin_text) = self.get_clip_description()
         anno_loc = anno_loc[1]
@@ -978,46 +1195,46 @@ class VideoPlayer(QWidget):
         self.progress.setMinimumDuration(0)
         self.progress.show()
         
-        #################### parse video language annotation ####################
-        lang_res = dict()
-        if (0, 0) in self.lang_anno and self.lang_anno[(0, 0)] != '':
-            lang_res['video'] = self.lang_anno[(0, 0)]
-        else:
-            self.progress.close()
-            self.smart_message("请标注整体视频的语言描述")
-            return 
-        #################### parse clip language annotation ####################
         if self.validate_lang_clip_coverage() == -1:
             self.progress.close()
             return -1
+        video_text = self.lang_anno.get((0, 0), "").strip()
+        if not video_text:
+            self.progress.close()
+            self.smart_message("请按回车标注整体视频描述")
+            return -1
 
-        lang_res['clip'] = []
-        for clip_range, lang in sorted(self.lang_anno.items()):
-            if clip_range == (0, 0):
-                continue
-            clip_text = lang[0] if isinstance(lang, tuple) else lang
-            if not clip_text:
+        lang_res = {
+            "schema_version": SCHEMA_VERSION,
+            "template_set_version": TEMPLATE_SET_VERSION,
+            "video_text": video_text,
+            "subtasks": [],
+        }
+        clip_items = sorted((key, value) for key, value in self.lang_anno.items() if key != (0, 0))
+        for clip_range, lang in clip_items:
+            if not isinstance(lang, dict):
                 self.progress.close()
                 self.smart_message(f"请完成帧{clip_range[0]}到帧{clip_range[1]}之前的语言标注")
                 return -1
-            tmp_lang = dict()
-            tmp_lang['start_frame'] = clip_range[0]
-            tmp_lang['end_frame'] = clip_range[1]
-            tmp_lang['description'] = lang
-            lang_res['clip'].append(tmp_lang)
-        lang_res['user'] = self.username
-        lang_res['video_path'] = self.video_path
-        lang_res['button_mode'] = self.button_mode
-        lang_res['frames'] = self.progress_slider.maximum()
+            subtask = dict(lang)
+            subtask["start_frame"] = clip_range[0]
+            subtask["end_frame"] = clip_range[1]
+            error = validate_subtask(subtask, SKILL_TEMPLATES, COORDINATION_MODES)
+            if error:
+                self.progress.close()
+                self.smart_message(error)
+                return -1
+            lang_res["subtasks"].append(subtask)
 
-        res = save_anno(self.ip_address, self.port, self.save_path, lang_res)
+        save_metadata = {"user": self.username, "video_path": self.video_path}
+        res = save_anno(self.ip_address, self.port, self.save_path, lang_res, save_metadata)
         try_time = 0
         while not res:
             if try_time > 3:
                 break
             self.smart_message("保存失败，进行第{}次重试".format(try_time+1))
             time.sleep(4)
-            res = save_anno(self.ip_address, self.port, self.save_path, lang_res)
+            res = save_anno(self.ip_address, self.port, self.save_path, lang_res, save_metadata)
             try_time += 1
         
         if not res:
@@ -1031,22 +1248,18 @@ class VideoPlayer(QWidget):
         return 0
 
     def validate_lang_clip_coverage(self):
-        clip_ranges = sorted([clip_range for clip_range in self.lang_anno if clip_range != (0, 0)])
+        clip_ranges = sorted(key for key in self.lang_anno if key != (0, 0))
         if len(clip_ranges) == 0:
             self.smart_message("请至少标注一个视频片段")
             return -1
 
-        expected_start = 0
-        final_frame = self.progress_slider.maximum()
+        expected_start = None
         for start_frame, end_frame in clip_ranges:
-            if start_frame != expected_start:
-                if expected_start == 0:
-                    self.smart_message("第一个视频片段必须从第1帧开始")
-                else:
-                    self.smart_message(
-                        f"视频片段不连续：上一段结束后应从第{expected_start + 1}帧开始，"
-                        f"但下一段从第{start_frame + 1}帧开始"
-                    )
+            if expected_start is not None and start_frame != expected_start:
+                self.smart_message(
+                    f"视频片段不连续：上一段结束后应从第{expected_start + 1}帧开始，"
+                    f"但下一段从第{start_frame + 1}帧开始"
+                )
                 return -1
 
             if end_frame < start_frame:
@@ -1054,16 +1267,11 @@ class VideoPlayer(QWidget):
                 return -1
 
             lang = self.lang_anno[(start_frame, end_frame)]
-            clip_text = lang[0] if isinstance(lang, tuple) else lang
-            if not clip_text:
+            if not isinstance(lang, dict) or not lang.get("text"):
                 self.smart_message(f"请完成帧{start_frame + 1}到帧{end_frame + 1}之间的语言标注")
                 return -1
 
             expected_start = end_frame + 1
-
-        if expected_start != final_frame + 1:
-            self.smart_message(f"最后一个视频片段必须覆盖到第{final_frame + 1}帧")
-            return -1
 
         return 0
     
@@ -1186,20 +1394,15 @@ class VideoPlayer(QWidget):
                 one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, three_anno_num, all_three_anno_num = res
         else:
             video, lang, save_path, video_path, hist_num = res
-            if lang and lang.get('has_ori_instruction'):
-                self.video_2_lang = lang['annotation']
-                task_stepsC = self.video_2_lang['task_stepsC'].copy()
-                self.video_2_lang['task_stepsC'] = dict()
-                for i in (task_stepsC + BASE_CLIP_DES):
-                    self.video_2_lang['task_stepsC'][i] = None
-                self.video_2_lang['task_stepsC_list'] = task_stepsC
-            else:
-                self.video_2_lang = dict(
-                    task_stepsC=dict(),
-                    instructionC='',
-                    action_stepsC=[],
-                    task_stepsC_list = []
-                )
+            self.loaded_lang_annotation = (
+                lang if isinstance(lang, dict) and lang.get("schema_version") == SCHEMA_VERSION else None
+            )
+            self.video_2_lang = dict(
+                task_stepsC=dict(),
+                instructionC='',
+                action_stepsC=[],
+                task_stepsC_list=[]
+            )
         self.save_path = save_path
         self.video_path = video_path
         self.hist_num = hist_num
@@ -1289,14 +1492,26 @@ class VideoPlayer(QWidget):
         
         # load global language annotation
         if self.mode == '语言标注':
-            video_anno_json = self.video_2_lang
-            # TODO check exist
-            global_instruction_C = video_anno_json['instructionC'] if 'instructionC' in video_anno_json else ''
-            if (0, 0) not in self.lang_anno or self.lang_anno[(0, 0)] == '':
-                self.lang_anno[(0, 0)] = global_instruction_C
-
-            desc = self.lang_anno[(0, 0)]
-            self.video_lang_input.setText(f"视频描述: {desc}")
+            if self.loaded_lang_annotation:
+                video_text = self.loaded_lang_annotation.get("video_text", "")
+                if video_text:
+                    self.lang_anno[(0, 0)] = video_text
+                for subtask in self.loaded_lang_annotation.get("subtasks", []):
+                    try:
+                        start_frame = int(subtask["start_frame"])
+                        end_frame = int(subtask["end_frame"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    subtask_data = {
+                        key: value for key, value in subtask.items()
+                        if key not in ("start_frame", "end_frame")
+                    }
+                    self.lang_anno[(start_frame, end_frame)] = subtask_data
+                    self.keyframes[start_frame] = 'start'
+                    self.keyframes[end_frame] = 'end'
+                self.update_keyframe_bar()
+            video_text = self.lang_anno.get((0, 0), "")
+            self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
             self.preview_clip_lang_input.setText(self.get_clip_lang_anno())
         
         return 1
@@ -1338,11 +1553,8 @@ class VideoPlayer(QWidget):
         self.sam_pre_button.setDisabled(True)
         self.sam_next_button.setDisabled(False)
         
-        if (0, 0) in self.lang_anno:
-            desc = self.lang_anno[(0, 0)]
-            self.video_lang_input.setText(f"视频描述: {desc}")
-        else:
-            self.video_lang_input.setText('')
+        video_text = self.lang_anno.get((0, 0), "")
+        self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
         
         anno_loc, (clip_text, prim, origin_text) = self.get_clip_description()
         anno_loc = anno_loc[1]
@@ -1904,16 +2116,10 @@ class VideoPlayer(QWidget):
     def delete_keyframe(self):
         info, lang = self.get_clip_description()
         if info[0] is not None:
-            # remove the description
             idx, loc = info
             self.lang_anno.pop(loc)
             self.keyframes.pop(loc[0])
             self.keyframes.pop(loc[1])
-            for i in self.video_2_lang['task_stepsC']:
-                if lang[0] is None:
-                    continue
-                if self.video_2_lang['task_stepsC'][i] == lang[0]:
-                    self.video_2_lang['task_stepsC'][i] = None
             self.update_keyframe_bar()
             self.clip_lang_input.clear()
             self.selected_keyframe = None
@@ -1922,76 +2128,61 @@ class VideoPlayer(QWidget):
         frame_number = self.progress_slider.value()
         if self.update_lang_anno() == -1:
             return
-        key_pairs = list(self.lang_anno.keys())
+        key_pairs = [key for key in self.lang_anno if key != (0, 0)]
         has_key = [i[0] <= frame_number <= i[1] for i in key_pairs].count(True) > 0
         if not has_key:
             self.smart_message('请先标记当前所在区域的起止帧')
             return
 
-        # load the cached description
+        # load the cached subtask
         anno_loc = [(idx, i) for idx, i in enumerate(key_pairs) if i[0] <= frame_number <= i[1] and i[0] != i[1]]
-        if (0, 0) in self.lang_anno:
-            anno_loc = [(i[0], i[1]) for i in anno_loc]
-        
         if len(anno_loc) == 0:
             self.smart_message('请移动到所在区域的起止帧之间')
             return
         anno_id, anno_loc = anno_loc[0]
         
-        if self.lang_anno[anno_loc][0] is not None:
-            cached_lang, prim, origin_text = self.lang_anno[anno_loc]
-        else:
+        cached_clip = self.lang_anno[anno_loc]
+        cached_lang, prim, origin_text = get_subtask_display(cached_clip)
+        if not isinstance(cached_clip, dict):
+            cached_clip = ''
             cached_lang, prim, origin_text = '', '', ''
-        # Create a dialog to get the description from the user
-        dialog = TextInputDialog(cached_lang, self, False, self.video_2_lang, origin_text=origin_text)
+        # Create a dialog to get the structured subtask from the user
+        dialog = TextInputDialog(cached_clip, self, False, self.video_2_lang, origin_text=origin_text)
         if dialog.exec_() == QDialog.Accepted:
-            select_gt_id = [i for i in self.video_2_lang['task_stepsC'] if self.video_2_lang['task_stepsC'][i] == cached_lang]
-            if len(select_gt_id) > 0:
-                self.video_2_lang['task_stepsC'][select_gt_id[0]] = None
-
-            cached_lang = dialog.get_text()
-            prim = dialog.get_prim()
-            select_lang = dialog.get_select_lang()
-            if select_lang != '空':
-                self.video_2_lang['task_stepsC'][select_lang] = cached_lang
-                
-            self.lang_anno[anno_loc] = (cached_lang, prim, select_lang)
+            structured_clip = dialog.get_structured_result()
+            cached_lang, prim, _ = get_subtask_display(structured_clip)
+            self.lang_anno[anno_loc] = structured_clip
             self.clip_lang_input.setText(f"开始帧: {anno_loc[0]+1} | 结束帧: {anno_loc[1]+1}\n原子动作: {prim}\n动作描述: {cached_lang}")
+            self.preview_clip_lang_input.setText(self.get_clip_lang_anno())
         else:
             self.delete_keyframe()
             return
     
     def add_video_description(self):
-        # Create a dialog to get the description from the user
-        if (0, 0) in self.lang_anno:
-            cached_lang = self.lang_anno[(0, 0)]
-        else:
-            cached_lang = ''
-        
+        cached_lang = self.lang_anno.get((0, 0), "")
         dialog = TextInputDialog(cached_lang, self, True, self.video_2_lang)
         if dialog.exec_() == QDialog.Accepted:
-            video_description = dialog.get_text()
+            video_description = dialog.get_text().strip()
             self.lang_anno[(0, 0)] = video_description
-            self.video_lang_input.setText(f"视频描述: {video_description}")
-        else:
-            return
+            self.video_lang_input.setText(f"视频整体描述: {video_description}")
 
     def get_clip_description(self):
-        # Get the description for the clip
-        key_pairs = list(self.lang_anno.keys())
+        # Get the subtask text for the clip
+        key_pairs = [key for key in self.lang_anno if key != (0, 0)]
         frame_number = self.progress_slider.value()
         anno_loc = [(idx, i) for idx, i in enumerate(key_pairs) if i[0] <= frame_number <= i[1] and i[0] != i[1]]
         if len(anno_loc) > 0:
             anno_loc = anno_loc[0]
-            return anno_loc, self.lang_anno[anno_loc[1]]
+            return anno_loc, get_subtask_display(self.lang_anno[anno_loc[1]])
         return (None, None), (None, None, None)
 
     def get_clip_lang_anno(self):
-        lang = self.video_2_lang['task_stepsC']
         out_text = ''
-        for i in enumerate(lang):
-            if i[1] not in BASE_CLIP_DES:
-                out_text += f"{i[0]+1}: {i[1]}\n"
+        for idx, ((start_frame, end_frame), subtask) in enumerate(
+            sorted((key, value) for key, value in self.lang_anno.items() if key != (0, 0))
+        ):
+            text, _, _ = get_subtask_display(subtask)
+            out_text += f"{idx + 1}: 帧{start_frame + 1}-{end_frame + 1} {text}\n"
         return out_text.strip()
 
 

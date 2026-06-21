@@ -9,6 +9,7 @@ import zipfile
 import json
 import os
 import pickle
+import sys
 import numpy as np
 import yaml
 from flask import Flask, request, send_file
@@ -24,6 +25,16 @@ app = Flask(__name__)
 CONFIG = None
 ROOT_DIR = None
 PATHS = None
+
+
+COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
+if COMMON_DIR not in sys.path:
+    sys.path.insert(0, COMMON_DIR)
+
+from skill_schema import load_coordination_modes, load_skill_templates, validate_annotation
+
+TEMPLATE_SET_VERSION, SKILL_TEMPLATES = load_skill_templates()
+COORDINATION_MODES = load_coordination_modes()
 
 
 def load_server_config(config_path="./config/config.yaml"):
@@ -69,54 +80,8 @@ def save_user_history(user_name, mode, history, suffix=""):
         os.fsync(f.fileno())
 
 
-def extract_lang_text(lang):
-    if isinstance(lang, (list, tuple)):
-        return lang[0] if len(lang) > 0 else ""
-    return lang
-
-
 def validate_language_annotation(anno):
-    if not anno.get("video"):
-        return "请标注整体视频的语言描述"
-
-    clips = anno.get("clip", [])
-    if not clips:
-        return "请至少标注一个视频片段"
-
-    try:
-        sorted_clips = sorted(clips, key=lambda item: int(item["start_frame"]))
-    except (KeyError, TypeError, ValueError):
-        return "视频片段格式错误"
-
-    expected_start = 0
-    final_frame = int(anno.get("frames", 0))
-    for clip in sorted_clips:
-        try:
-            start_frame = int(clip["start_frame"])
-            end_frame = int(clip["end_frame"])
-        except (KeyError, TypeError, ValueError):
-            return "视频片段帧范围格式错误"
-
-        if start_frame != expected_start:
-            if expected_start == 0:
-                return "第一个视频片段必须从第1帧开始"
-            return (
-                f"视频片段不连续：上一段结束后应从第{expected_start + 1}帧开始，"
-                f"但下一段从第{start_frame + 1}帧开始"
-            )
-
-        if end_frame < start_frame:
-            return f"视频片段帧范围错误：第{start_frame + 1}帧到第{end_frame + 1}帧"
-
-        if not extract_lang_text(clip.get("description")):
-            return f"请完成帧{start_frame + 1}到帧{end_frame + 1}之间的语言标注"
-
-        expected_start = end_frame + 1
-
-    if expected_start != final_frame + 1:
-        return f"最后一个视频片段必须覆盖到第{final_frame + 1}帧"
-
-    return None
+    return validate_annotation(anno, SKILL_TEMPLATES, COORDINATION_MODES)
 
 
 def get_diff(a, b):
@@ -250,8 +215,14 @@ def get_video_lang():
             anno_path = video_info.get('anno_path')
             if anno_path and os.path.exists(anno_path):
                 npz_io = io.BytesIO()
-                anno_file = np.load(anno_path, allow_pickle=True)
-                np.savez_compressed(npz_io, anno_file=anno_file.get('data', anno_file))
+                with np.load(anno_path, allow_pickle=True) as anno_file:
+                    if 'anno_file' in anno_file:
+                        anno_data = anno_file['anno_file']
+                    elif 'arr_0' in anno_file:
+                        anno_data = anno_file['arr_0']
+                    else:
+                        anno_data = pickle.dumps({})
+                np.savez_compressed(npz_io, anno_file=anno_data)
                 npz_io.seek(0)
                 zf.writestr("anno.npz", npz_io.getvalue())
 
@@ -407,8 +378,8 @@ def save_anno():
         anno = data['anno_file'].item()
 
     save_path = request.form.get('save_path')
-    user_name = anno.get('user', 'unknown')
-    video_path = anno.get('video_path', '')
+    user_name = request.form.get('user') or request.form.get('user_name') or anno.get('user', 'unknown')
+    video_path = request.form.get('video_path') or anno.get('video_path', '')
 
     mode = 'sam' if 'human_anno_sam' in save_path or '/sam/' in save_path else 'lang'
     if mode == 'lang':
@@ -430,12 +401,12 @@ def save_anno():
     np.savez(save_path, pickle.dumps(anno))
 
     # Update user history
-    history = get_user_history(user_name, mode, time)
-    if history and video_path == history[-1].strip():
-        history = history[:-1]
-    history.append(video_path + '\n')
-    
-    save_user_history(user_name, mode, history, time)
+    if video_path:
+        history = get_user_history(user_name, mode, time)
+        if history and video_path == history[-1].strip():
+            history = history[:-1]
+        history.append(video_path + '\n')
+        save_user_history(user_name, mode, history, time)
 
     # Handle finished/hard sample markers
     if anno.get('is_finished', False):
