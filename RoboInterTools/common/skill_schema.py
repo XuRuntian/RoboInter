@@ -6,14 +6,27 @@ import yaml
 
 SCHEMA_VERSION = "skill_text_v1"
 TEMPLATE_SET_VERSION = "skill_templates_v1"
+SCENE_TEMPLATE_VERSION = "scene_templates_v1"
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_SKILL_TEMPLATE_PATH = os.path.join(ROOT_DIR, "config", "skill_templates.yaml")
 DEFAULT_COORDINATION_MODE_PATH = os.path.join(ROOT_DIR, "config", "coordination_modes.yaml")
+DEFAULT_SCENE_TEMPLATE_PATH = os.path.join(ROOT_DIR, "config", "scene_templates.yaml")
 
 ACTION_ALLOWED_KEYS = {"subject", "skill", "slots", "text"}
 SUBTASK_ALLOWED_KEYS = {"start_frame", "end_frame", "coordination_mode", "actions", "text"}
-ANNOTATION_ALLOWED_KEYS = {"schema_version", "template_set_version", "video_text", "subtasks"}
+SCENE_OBJECT_ALLOWED_KEYS = {"name", "role", "support_or_region", "states", "affordance"}
+SCENE_LOCATION_ALLOWED_KEYS = {"space", "anchor"}
+SCENE_ALLOWED_KEYS = {
+    "scene_level1",
+    "scene_level2",
+    "task_type",
+    "template_id",
+    "text",
+    "scene_location",
+    "objects",
+}
+ANNOTATION_ALLOWED_KEYS = {"schema_version", "template_set_version", "video_text", "scene", "subtasks"}
 
 
 def load_yaml_file(path):
@@ -126,6 +139,234 @@ def load_coordination_modes(path=DEFAULT_COORDINATION_MODE_PATH):
     if not modes:
         raise ValueError("coordination_modes.yaml has no modes")
     return modes
+
+
+def load_scene_templates(path=DEFAULT_SCENE_TEMPLATE_PATH):
+    data = load_yaml_file(path)
+    scene_template_version = data.get("scene_template_version")
+    if scene_template_version != SCENE_TEMPLATE_VERSION:
+        raise ValueError(
+            f"scene_template_version must be {SCENE_TEMPLATE_VERSION}, got {scene_template_version}"
+        )
+
+    template_id = data.get("template_id")
+    if not template_id:
+        raise ValueError("scene_templates.yaml missing template_id")
+    template = data.get("template")
+    ui_template = data.get("ui_template")
+    if not template or not ui_template:
+        raise ValueError("scene_templates.yaml missing template/ui_template")
+
+    required_slots = data.get("required_slots")
+    if not isinstance(required_slots, list) or not required_slots:
+        raise ValueError("scene_templates.yaml required_slots must be a non-empty list")
+    required_slot_set = set(required_slots)
+    for field_name, field_template in (("template", template), ("ui_template", ui_template)):
+        template_slots = set(extract_template_slots(field_template))
+        if template_slots != required_slot_set:
+            raise ValueError(
+                f"scene {field_name} slots {sorted(template_slots)} "
+                f"do not match required_slots {sorted(required_slot_set)}"
+            )
+
+    enum_constraints = data.get("enum_constraints", {}) or {}
+    if not isinstance(enum_constraints, dict):
+        raise ValueError("scene enum_constraints must be a dict")
+    enum_display_names = data.get("enum_display_names", {}) or {}
+    if not isinstance(enum_display_names, dict):
+        raise ValueError("scene enum_display_names must be a dict")
+
+    object_roles = data.get("object_roles", []) or []
+    role_ids = [role.get("id") for role in object_roles if isinstance(role, dict)]
+    if set(role_ids) != {"main", "other"}:
+        raise ValueError("scene object_roles must contain main and other")
+
+    return {
+        "scene_template_version": scene_template_version,
+        "template_id": template_id,
+        "template": template,
+        "ui_template": ui_template,
+        "required_slots": required_slots,
+        "slot_display_names": data.get("slot_display_names", {}) or {},
+        "enum_constraints": enum_constraints,
+        "enum_display_names": enum_display_names,
+        "object_roles": object_roles,
+    }
+
+
+def split_text_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [
+        item.strip()
+        for item in re.split(r"[,，;；\n]+", str(value))
+        if item.strip()
+    ]
+
+
+def join_scene_items(items):
+    return ", ".join([str(item).strip() for item in items if str(item).strip()])
+
+
+def scene_render_values(scene):
+    scene_location = scene.get("scene_location") or {}
+    objects = scene.get("objects") or []
+    main_objects = [obj for obj in objects if obj.get("role") == "main"]
+    other_objects = [obj for obj in objects if obj.get("role") == "other"]
+
+    support_parts = [
+        f"{obj.get('name')} at {obj.get('support_or_region')}"
+        for obj in main_objects
+        if str(obj.get("name", "")).strip() and str(obj.get("support_or_region", "")).strip()
+    ]
+    state_parts = []
+    for obj in main_objects:
+        states = split_text_list(obj.get("states"))
+        if str(obj.get("name", "")).strip() and states:
+            state_parts.append(f"{obj.get('name')} {join_scene_items(states)}")
+
+    return {
+        "space": scene_location.get("space", ""),
+        "anchor": scene_location.get("anchor", ""),
+        "main_objects": join_scene_items([obj.get("name") for obj in main_objects]),
+        "support_or_region": "; ".join(support_parts),
+        "object_states": "; ".join(state_parts),
+        "other_objects": join_scene_items([obj.get("name") for obj in other_objects]) or "no other objects",
+    }
+
+
+def render_scene_text(scene, scene_template):
+    return render_template(scene_template["template"], scene_render_values(scene))
+
+
+def build_scene_from_values(scene_values, objects, scene_template):
+    scene = {
+        "scene_level1": str(scene_values.get("scene_level1", "")).strip(),
+        "scene_level2": str(scene_values.get("scene_level2", "")).strip(),
+        "task_type": str(scene_values.get("task_type", "")).strip(),
+        "template_id": scene_template["template_id"],
+        "scene_location": {
+            "space": str(scene_values.get("space", "")).strip(),
+            "anchor": str(scene_values.get("anchor", "")).strip(),
+        },
+        "objects": [],
+        "text": "",
+    }
+    for obj in objects:
+        normalized_obj = {
+            "name": str(obj.get("name", "")).strip(),
+            "role": str(obj.get("role", "")).strip(),
+            "support_or_region": str(obj.get("support_or_region", "")).strip(),
+            "states": split_text_list(obj.get("states")),
+            "affordance": split_text_list(obj.get("affordance")),
+        }
+        if (
+            normalized_obj["name"]
+            or normalized_obj["support_or_region"]
+            or normalized_obj["states"]
+            or normalized_obj["affordance"]
+        ):
+            scene["objects"].append(normalized_obj)
+    scene["text"] = render_scene_text(scene, scene_template)
+    return scene
+
+
+def validate_scene_enum(field_name, value, scene_template, prefix):
+    allowed_values = scene_template.get("enum_constraints", {}).get(field_name, []) or []
+    if allowed_values and value not in allowed_values:
+        return f"{prefix} {field_name} 必须属于 {allowed_values}"
+    return None
+
+
+def validate_scene(scene, scene_template=None, prefix="scene"):
+    if scene_template is None:
+        scene_template = load_scene_templates()
+    if not isinstance(scene, dict):
+        return f"{prefix} 必须是 dict"
+
+    unknown_keys = set(scene) - SCENE_ALLOWED_KEYS
+    if unknown_keys:
+        return f"{prefix} 出现未知字段: {sorted(unknown_keys)}"
+    missing_keys = SCENE_ALLOWED_KEYS - set(scene)
+    if missing_keys:
+        return f"{prefix} 缺少字段: {sorted(missing_keys)}"
+
+    if scene.get("template_id") != scene_template["template_id"]:
+        return f"{prefix} template_id 必须是 {scene_template['template_id']}"
+    scene_location = scene.get("scene_location")
+    if not isinstance(scene_location, dict):
+        return f"{prefix} scene_location 必须是 dict"
+    unknown_location_keys = set(scene_location) - SCENE_LOCATION_ALLOWED_KEYS
+    if unknown_location_keys:
+        return f"{prefix}.scene_location 出现未知字段: {sorted(unknown_location_keys)}"
+    missing_location_keys = SCENE_LOCATION_ALLOWED_KEYS - set(scene_location)
+    if missing_location_keys:
+        return f"{prefix}.scene_location 缺少字段: {sorted(missing_location_keys)}"
+    if not str(scene_location.get("space", "")).strip():
+        return f"{prefix}.scene_location space 不能为空"
+    if not str(scene_location.get("anchor", "")).strip():
+        return f"{prefix}.scene_location anchor 不能为空"
+
+    for enum_field in ("scene_level1", "scene_level2", "task_type"):
+        error = validate_scene_enum(enum_field, scene.get(enum_field, ""), scene_template, prefix)
+        if error:
+            return error
+
+    objects = scene.get("objects")
+    if not isinstance(objects, list) or not objects:
+        return f"{prefix} objects 必须非空"
+
+    role_ids = {
+        role.get("id")
+        for role in scene_template.get("object_roles", [])
+        if isinstance(role, dict)
+    }
+    has_main_object = False
+    affordance_enum = scene_template.get("enum_constraints", {}).get("affordance", []) or []
+    for obj_idx, obj in enumerate(objects):
+        obj_prefix = f"{prefix}.objects[{obj_idx}]"
+        if not isinstance(obj, dict):
+            return f"{obj_prefix} 必须是 dict"
+        unknown_keys = set(obj) - SCENE_OBJECT_ALLOWED_KEYS
+        if unknown_keys:
+            return f"{obj_prefix} 出现未知字段: {sorted(unknown_keys)}"
+        missing_keys = SCENE_OBJECT_ALLOWED_KEYS - set(obj)
+        if missing_keys:
+            return f"{obj_prefix} 缺少字段: {sorted(missing_keys)}"
+        if not str(obj.get("name", "")).strip():
+            return f"{obj_prefix} name 不能为空"
+        role = obj.get("role")
+        if role not in role_ids:
+            return f"{obj_prefix} role 必须属于 {sorted(role_ids)}"
+        if role == "main":
+            has_main_object = True
+            if not str(obj.get("support_or_region", "")).strip():
+                return f"{obj_prefix} main object 的 support_or_region 不能为空"
+        states = obj.get("states")
+        if not isinstance(states, list) or not states:
+            return f"{obj_prefix} states 必须非空 list"
+        if not all(str(state).strip() for state in states):
+            return f"{obj_prefix} states 不允许为空"
+        affordance = obj.get("affordance")
+        if not isinstance(affordance, list):
+            return f"{obj_prefix} affordance 必须是 list"
+        if affordance_enum:
+            invalid_affordance = [
+                item for item in affordance
+                if str(item) not in [str(value) for value in affordance_enum]
+            ]
+            if invalid_affordance:
+                return f"{obj_prefix} affordance 必须属于 {affordance_enum}: {invalid_affordance}"
+
+    if not has_main_object:
+        return f"{prefix} 至少需要一个 role=main 的 object"
+
+    expected_text = render_scene_text(scene, scene_template)
+    if scene.get("text") != expected_text:
+        return f"{prefix} text 必须等于 scene template 自动渲染结果"
+    return None
 
 
 def get_skill(skill_id, skill_templates):
@@ -310,11 +551,13 @@ def validate_both_same_skill_same_object(actions, prefix):
     return None
 
 
-def validate_annotation(annotation, skill_templates=None, coordination_modes=None):
+def validate_annotation(annotation, skill_templates=None, coordination_modes=None, scene_template=None):
     if skill_templates is None:
         _, skill_templates = load_skill_templates()
     if coordination_modes is None:
         coordination_modes = load_coordination_modes()
+    if scene_template is None:
+        scene_template = load_scene_templates()
 
     if not isinstance(annotation, dict):
         return "annotation 必须是 dict"
@@ -332,6 +575,9 @@ def validate_annotation(annotation, skill_templates=None, coordination_modes=Non
         return f"template_set_version 必须是 {TEMPLATE_SET_VERSION}"
     if not str(annotation.get("video_text", "")).strip():
         return "video_text 不能为空"
+    scene_error = validate_scene(annotation.get("scene"), scene_template)
+    if scene_error:
+        return scene_error
 
     subtasks = annotation.get("subtasks")
     if not isinstance(subtasks, list) or not subtasks:

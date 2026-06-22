@@ -21,15 +21,21 @@ from skill_schema import (
     SCHEMA_VERSION,
     TEMPLATE_SET_VERSION,
     build_action_from_slot_values,
+    build_scene_from_values,
     load_coordination_modes,
+    load_scene_templates,
     load_skill_templates,
+    render_scene_text,
     render_subtask_text,
+    validate_annotation,
+    validate_scene,
     validate_subtask,
 )
 
 
 TEMPLATE_SET_VERSION, SKILL_TEMPLATES = load_skill_templates()
 COORDINATION_MODES = load_coordination_modes()
+SCENE_TEMPLATE = load_scene_templates()
 SKILL_LIST = list(SKILL_TEMPLATES.values())
 DEFAULT_SKILL_ID = "manipulate" if "manipulate" in SKILL_TEMPLATES else SKILL_LIST[-1]["id"]
 DEFAULT_COORDINATION_MODE = (
@@ -47,6 +53,273 @@ def get_subtask_display(subtask):
     actions = subtask.get("actions") or []
     primary_skill = actions[0].get("skill", "") if actions else ""
     return subtask.get("text", ""), primary_skill, ""
+
+
+class SceneInputDialog(QDialog):
+
+    def __init__(self, initial_scene=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("场景标注")
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.scene_result = None
+        self.object_rows = []
+        self.main_layout = QVBoxLayout(self)
+        self.form_layout = QGridLayout()
+        self.main_layout.addLayout(self.form_layout)
+
+        initial_scene = initial_scene if isinstance(initial_scene, dict) else {}
+        self.scene_level1_select = self.create_enum_combo("scene_level1", initial_scene.get("scene_level1", ""))
+        self.scene_level2_select = self.create_enum_combo("scene_level2", initial_scene.get("scene_level2", ""))
+        self.task_type_select = self.create_enum_combo("task_type", initial_scene.get("task_type", ""))
+        initial_location = initial_scene.get("scene_location") or {}
+        if not initial_location and initial_scene.get("scene_area"):
+            initial_location = {"space": initial_scene.get("scene_area"), "anchor": ""}
+        self.scene_space_input = QLineEdit(self)
+        self.scene_space_input.setPlaceholderText("英文，例如 bathroom / bedroom / kitchen")
+        self.scene_space_input.setText(initial_location.get("space", ""))
+        self.scene_space_input.textChanged.connect(self.update_preview)
+        self.scene_anchor_input = QLineEdit(self)
+        self.scene_anchor_input.setPlaceholderText("英文，例如 toilet / bed / sink")
+        self.scene_anchor_input.setText(initial_location.get("anchor", ""))
+        self.scene_anchor_input.textChanged.connect(self.update_preview)
+
+        row = 0
+        self.form_layout.addWidget(QLabel("一级场景:", self), row, 0)
+        self.form_layout.addWidget(self.scene_level1_select, row, 1)
+        row += 1
+        self.form_layout.addWidget(QLabel("二级场景:", self), row, 0)
+        self.form_layout.addWidget(self.scene_level2_select, row, 1)
+        row += 1
+        self.form_layout.addWidget(QLabel("任务类型:", self), row, 0)
+        self.form_layout.addWidget(self.task_type_select, row, 1)
+        row += 1
+        self.form_layout.addWidget(QLabel("任务所在空间:", self), row, 0)
+        self.form_layout.addWidget(self.scene_space_input, row, 1)
+        row += 1
+        self.form_layout.addWidget(QLabel("任务场景锚点:", self), row, 0)
+        self.form_layout.addWidget(self.scene_anchor_input, row, 1)
+        row += 1
+
+        template_box = QTextEdit(self)
+        template_box.setReadOnly(True)
+        template_box.setFixedSize(840, 55)
+        template_box.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+        template_box.setText(SCENE_TEMPLATE["ui_template"])
+        self.form_layout.addWidget(QLabel("场景模板:", self), row, 0)
+        self.form_layout.addWidget(template_box, row, 1)
+
+        object_title_layout = QHBoxLayout()
+        object_title_layout.addWidget(QLabel("物体列表（请填写英文短语，界面显示中文，保存英文）", self))
+        self.add_object_button = QPushButton("添加物体", self)
+        self.add_object_button.clicked.connect(lambda: self.add_object_row({}))
+        object_title_layout.addWidget(self.add_object_button)
+        self.main_layout.addLayout(object_title_layout)
+
+        self.objects_layout = QGridLayout()
+        self.main_layout.addLayout(self.objects_layout)
+
+        self.preview = QTextEdit(self)
+        self.preview.setReadOnly(True)
+        self.preview.setFixedSize(960, 70)
+        self.preview.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+        self.main_layout.addWidget(QLabel("保存英文预览:", self))
+        self.main_layout.addWidget(self.preview)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box.button(QDialogButtonBox.Ok).setText("确定")
+        self.button_box.button(QDialogButtonBox.Cancel).setText("取消")
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        self.main_layout.addWidget(self.button_box)
+
+        initial_objects = initial_scene.get("objects") or [{}]
+        for obj in initial_objects:
+            self.add_object_row(obj)
+        self.update_preview()
+
+    def create_enum_combo(self, field_name, current_value):
+        combo = QComboBox(self)
+        combo.setFixedSize(360, 30)
+        values = SCENE_TEMPLATE.get("enum_constraints", {}).get(field_name, []) or []
+        display_names = SCENE_TEMPLATE.get("enum_display_names", {}).get(field_name, {}) or {}
+        if values:
+            combo.addItem("请选择", "")
+            for value in values:
+                label = display_names.get(value, value)
+                combo.addItem(f"{label} ({value})", value)
+            self.set_combo_by_data(combo, current_value)
+        else:
+            combo.setEditable(True)
+            combo.setEditText(current_value or "")
+        combo.currentIndexChanged.connect(self.update_preview)
+        if combo.isEditable():
+            combo.editTextChanged.connect(self.update_preview)
+        return combo
+
+    def create_role_combo(self, current_role):
+        combo = QComboBox(self)
+        for role in SCENE_TEMPLATE.get("object_roles", []):
+            combo.addItem(role.get("display_name", role["id"]), role["id"])
+        self.set_combo_by_data(combo, current_role or "main")
+        combo.currentIndexChanged.connect(self.update_preview)
+        combo.setFixedSize(130, 30)
+        return combo
+
+    def create_affordance_editor(self, selected_values):
+        affordance_values = SCENE_TEMPLATE.get("enum_constraints", {}).get("affordance", []) or []
+        display_names = SCENE_TEMPLATE.get("enum_display_names", {}).get("affordance", {}) or {}
+        selected_values = set(selected_values or [])
+        if not affordance_values:
+            editor = QLineEdit(self)
+            editor.setPlaceholderText("英文逗号分隔，例如 foldable, graspable")
+            editor.setText(", ".join(selected_values))
+            editor.textChanged.connect(self.update_preview)
+            editor.setFixedSize(210, 30)
+            return editor
+
+        holder = QWidget(self)
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        holder.affordance_checks = []
+        for value in affordance_values:
+            label = display_names.get(value, value)
+            checkbox = QCheckBox(f"{label} ({value})", self)
+            checkbox.setChecked(value in selected_values)
+            checkbox.stateChanged.connect(self.update_preview)
+            holder.affordance_checks.append((checkbox, value))
+            layout.addWidget(checkbox)
+        return holder
+
+    def set_combo_by_data(self, combo, value):
+        for idx in range(combo.count()):
+            if combo.itemData(idx) == value:
+                combo.setCurrentIndex(idx)
+                return
+        combo.setCurrentIndex(0)
+
+    def combo_value(self, combo):
+        data = combo.itemData(combo.currentIndex())
+        if data is not None and data != "":
+            return data
+        return combo.currentText().strip()
+
+    def split_input_list(self, text):
+        return [item.strip() for item in re.split(r"[,，;；\n]+", text or "") if item.strip()]
+
+    def affordance_values(self, widget):
+        if isinstance(widget, QLineEdit):
+            return self.split_input_list(widget.text())
+        return [value for checkbox, value in getattr(widget, "affordance_checks", []) if checkbox.isChecked()]
+
+    def add_object_row(self, obj):
+        row_idx = len(self.object_rows) + 1
+        if row_idx == 1:
+            headers = ["物体英文名", "角色", "支撑/区域", "状态（英文逗号分隔）", "affordance", ""]
+            for col, header in enumerate(headers):
+                label = QLabel(header, self)
+                label.setStyleSheet("font-weight: bold;")
+                self.objects_layout.addWidget(label, 0, col)
+
+        name_input = QLineEdit(self)
+        name_input.setPlaceholderText("blue towel")
+        name_input.setText(obj.get("name", ""))
+        name_input.textChanged.connect(self.update_preview)
+        name_input.setFixedSize(140, 30)
+
+        role_select = self.create_role_combo(obj.get("role", "main"))
+
+        support_input = QLineEdit(self)
+        support_input.setPlaceholderText("tray / table surface")
+        support_input.setText(obj.get("support_or_region", ""))
+        support_input.textChanged.connect(self.update_preview)
+        support_input.setFixedSize(160, 30)
+
+        states_input = QLineEdit(self)
+        states_input.setPlaceholderText("unfolded, empty")
+        states_input.setText(", ".join(obj.get("states", []) or []))
+        states_input.textChanged.connect(self.update_preview)
+        states_input.setFixedSize(180, 30)
+
+        affordance_editor = self.create_affordance_editor(obj.get("affordance", []) or [])
+        remove_button = QPushButton("删除", self)
+        remove_button.setFixedSize(70, 30)
+
+        row_data = {
+            "name": name_input,
+            "role": role_select,
+            "support_or_region": support_input,
+            "states": states_input,
+            "affordance": affordance_editor,
+            "remove": remove_button,
+        }
+        remove_button.clicked.connect(lambda: self.remove_object_row(row_data))
+        self.object_rows.append(row_data)
+        self.render_object_rows()
+
+    def render_object_rows(self):
+        for row_idx, row_data in enumerate(self.object_rows, start=1):
+            self.objects_layout.addWidget(row_data["name"], row_idx, 0)
+            self.objects_layout.addWidget(row_data["role"], row_idx, 1)
+            self.objects_layout.addWidget(row_data["support_or_region"], row_idx, 2)
+            self.objects_layout.addWidget(row_data["states"], row_idx, 3)
+            self.objects_layout.addWidget(row_data["affordance"], row_idx, 4)
+            self.objects_layout.addWidget(row_data["remove"], row_idx, 5)
+
+    def remove_object_row(self, row_data):
+        if row_data not in self.object_rows:
+            return
+        self.object_rows.remove(row_data)
+        for widget in row_data.values():
+            widget.setParent(None)
+            widget.deleteLater()
+        self.update_preview()
+
+    def collect_objects(self):
+        objects = []
+        for row_data in self.object_rows:
+            objects.append({
+                "name": row_data["name"].text().strip(),
+                "role": self.combo_value(row_data["role"]),
+                "support_or_region": row_data["support_or_region"].text().strip(),
+                "states": self.split_input_list(row_data["states"].text()),
+                "affordance": self.affordance_values(row_data["affordance"]),
+            })
+        return objects
+
+    def collect_scene_values(self):
+        return {
+            "scene_level1": self.combo_value(self.scene_level1_select),
+            "scene_level2": self.combo_value(self.scene_level2_select),
+            "task_type": self.combo_value(self.task_type_select),
+            "space": self.scene_space_input.text().strip(),
+            "anchor": self.scene_anchor_input.text().strip(),
+        }
+
+    def build_scene(self):
+        return build_scene_from_values(
+            self.collect_scene_values(),
+            self.collect_objects(),
+            SCENE_TEMPLATE,
+        )
+
+    def update_preview(self):
+        try:
+            scene = self.build_scene()
+            self.preview.setText(render_scene_text(scene, SCENE_TEMPLATE))
+        except Exception:
+            self.preview.clear()
+
+    def accept(self):
+        scene = self.build_scene()
+        error = validate_scene(scene, SCENE_TEMPLATE)
+        if error:
+            QMessageBox.warning(self, "提示", error)
+            return
+        self.scene_result = scene
+        super().accept()
+
+    def get_scene_result(self):
+        return self.scene_result
 
 
 class TextInputDialog(QDialog):
@@ -685,6 +958,18 @@ class VideoPlayer(QWidget):
         self.video_lang_input.setFixedSize(610, 70)
         self.video_lang_input.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
         lang_layout.addWidget(self.video_lang_input)
+
+        scene_button_layout = QHBoxLayout()
+        self.scene_anno_button = QPushButton("添加/修改场景标注", self)
+        self.scene_anno_button.clicked.connect(self.add_scene_annotation)
+        scene_button_layout.addWidget(self.scene_anno_button)
+        lang_layout.addLayout(scene_button_layout)
+
+        self.scene_lang_input = QTextEdit(self)
+        self.scene_lang_input.setReadOnly(True)
+        self.scene_lang_input.setFixedSize(610, 95)
+        self.scene_lang_input.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+        lang_layout.addWidget(self.scene_lang_input)
         
         # Video clip language annotation area 
         lang_title_layout = QHBoxLayout()
@@ -708,6 +993,8 @@ class VideoPlayer(QWidget):
         if self.mode == '分割标注':
             # 删除语言标注区域
             self.video_lang_input.hide()
+            self.scene_anno_button.hide()
+            self.scene_lang_input.hide()
             self.clip_lang_input.hide()
             clip_title.hide()
             lang_title.hide()
@@ -728,7 +1015,7 @@ class VideoPlayer(QWidget):
             self.clear_all_button.hide()
             self.remove_last_button.hide()
             self.remove_frame_button.hide()
-            tips_items = ['W: 标志开始帧','S: 标记结束帧','F: 播放/暂停视频', '退格键: 删除标记段','A: 上一帧','回车: 添加视频标注','D: 下一帧', 'L: 修改视频段语言']
+            tips_items = ['W: 标志开始帧','S: 标记结束帧','F: 播放/暂停视频', '退格键: 删除标记段','A: 上一帧','回车: 添加视频标注','G: 场景标注','D: 下一帧', 'L: 修改视频段语言']
             
             preview_clip_layout = QVBoxLayout()
             preview_lang_title_layout = QHBoxLayout()
@@ -832,6 +1119,7 @@ class VideoPlayer(QWidget):
         self.vis_track_res = False
         self.sam_anno = False
         self.lang_anno = dict()
+        self.scene_annotation = None
         self.max_point_num = dict()
         self.video_2_lang = dict()
         self.loaded_lang_annotation = None
@@ -1248,11 +1536,16 @@ class VideoPlayer(QWidget):
             self.progress.close()
             self.smart_message("请按回车标注整体视频描述")
             return -1
+        if not self.scene_annotation:
+            self.progress.close()
+            self.smart_message("请先完成场景标注")
+            return -1
 
         lang_res = {
             "schema_version": SCHEMA_VERSION,
             "template_set_version": TEMPLATE_SET_VERSION,
             "video_text": video_text,
+            "scene": self.scene_annotation,
             "subtasks": [],
         }
         clip_items = sorted((key, value) for key, value in self.lang_anno.items() if key != (0, 0))
@@ -1270,6 +1563,12 @@ class VideoPlayer(QWidget):
                 self.smart_message(error)
                 return -1
             lang_res["subtasks"].append(subtask)
+
+        error = validate_annotation(lang_res, SKILL_TEMPLATES, COORDINATION_MODES, SCENE_TEMPLATE)
+        if error:
+            self.progress.close()
+            self.smart_message(error)
+            return -1
 
         save_metadata = {
             "user": self.username,
@@ -1294,6 +1593,7 @@ class VideoPlayer(QWidget):
             
         self.progress.close()
         self.lang_anno = dict()
+        self.scene_annotation = None
         return 0
 
     def validate_lang_clip_coverage(self):
@@ -1331,6 +1631,8 @@ class VideoPlayer(QWidget):
                 dict(pos=[], raw_pos=[], neg=[], raw_neg=[], labels=[])
             ]
         self.lang_anno = dict()
+        self.scene_annotation = None
+        self.update_scene_display()
         self.sam_next_button.setDisabled(False)
         self.sam_pre_button.setDisabled(True)
         self.sam_object_id[self.progress_slider.value()] = 0
@@ -1370,7 +1672,9 @@ class VideoPlayer(QWidget):
         self.max_point_num = dict()
         # self.vis_ori.setChecked(True)
         self.lang_anno = dict()
+        self.scene_annotation = None
         self.video_lang_input.clear()
+        self.update_scene_display()
         self.clip_lang_input.clear()
         self.video_position_label.setText(f"帧: -/-")
     
@@ -1514,6 +1818,7 @@ class VideoPlayer(QWidget):
             self.frame_count = video.shape[0]
         self.sam_object_id = [0] * self.frame_count
         self.lang_anno = dict()
+        self.scene_annotation = None
         self.tracking_points_sam = dict()
         self.ori_video = self.video_views if self.video_views else np.array(video)
         self.setup_video_view_labels()
@@ -1564,6 +1869,9 @@ class VideoPlayer(QWidget):
                 video_text = self.loaded_lang_annotation.get("video_text", "")
                 if video_text:
                     self.lang_anno[(0, 0)] = video_text
+                loaded_scene = self.loaded_lang_annotation.get("scene")
+                if isinstance(loaded_scene, dict):
+                    self.scene_annotation = loaded_scene
                 for subtask in self.loaded_lang_annotation.get("subtasks", []):
                     try:
                         start_frame = int(subtask["start_frame"])
@@ -1580,6 +1888,7 @@ class VideoPlayer(QWidget):
                 self.update_keyframe_bar()
             video_text = self.lang_anno.get((0, 0), "")
             self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
+            self.update_scene_display()
             self.preview_clip_lang_input.setText(self.get_clip_lang_anno())
         
         return 1
@@ -2167,6 +2476,8 @@ class VideoPlayer(QWidget):
             self.update_frame_position_label()
         elif key == Qt.Key_Return and self.mode == '语言标注':
             self.submit_description()
+        elif key == Qt.Key_G and self.mode == '语言标注':
+            self.add_scene_annotation()
         elif key == Qt.Key_F:
             self.is_stop = not self.is_stop
             self.autoplayorstop()
@@ -2296,6 +2607,30 @@ class VideoPlayer(QWidget):
             video_description = dialog.get_text().strip()
             self.lang_anno[(0, 0)] = video_description
             self.video_lang_input.setText(f"视频整体描述: {video_description}")
+
+    def update_scene_display(self):
+        if not hasattr(self, "scene_lang_input"):
+            return
+        if not self.scene_annotation:
+            self.scene_lang_input.clear()
+            return
+        object_count = len(self.scene_annotation.get("objects") or [])
+        scene_location = self.scene_annotation.get("scene_location") or {}
+        self.scene_lang_input.setText(
+            f"场景标注: {self.scene_annotation.get('text', '')}\n"
+            f"一级场景: {self.scene_annotation.get('scene_level1', '')} | "
+            f"二级场景: {self.scene_annotation.get('scene_level2', '')} | "
+            f"任务类型: {self.scene_annotation.get('task_type', '')} | "
+            f"空间: {scene_location.get('space', '')} | "
+            f"锚点: {scene_location.get('anchor', '')} | "
+            f"物体数: {object_count}"
+        )
+
+    def add_scene_annotation(self):
+        dialog = SceneInputDialog(self.scene_annotation, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.scene_annotation = dialog.get_scene_result()
+            self.update_scene_display()
 
     def get_clip_description(self):
         # Get the subtask text for the clip

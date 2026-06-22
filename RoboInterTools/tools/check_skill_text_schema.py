@@ -10,17 +10,22 @@ if COMMON_DIR not in sys.path:
 from skill_schema import (
     SCHEMA_VERSION,
     TEMPLATE_SET_VERSION,
+    build_scene_from_values,
     build_action_from_slot_values,
     extract_template_slots,
     load_coordination_modes,
+    load_scene_templates,
     load_skill_templates,
+    render_scene_text,
     render_subtask_text,
     validate_annotation,
+    validate_scene,
 )
 
 
 TEMPLATE_VERSION, SKILLS = load_skill_templates()
 COORDINATION_MODES = load_coordination_modes()
+SCENE_TEMPLATE = load_scene_templates()
 
 
 def pass_case(name):
@@ -121,11 +126,48 @@ def subtask(start, end, coordination_mode, actions):
     }
 
 
+def scene():
+    return build_scene_from_values(
+        {
+            "scene_level1": "",
+            "scene_level2": "",
+            "task_type": "",
+            "space": "bedroom",
+            "anchor": "bed",
+        },
+        [
+            {
+                "name": "blue towel",
+                "role": "main",
+                "support_or_region": "tray",
+                "states": ["unfolded"],
+                "affordance": ["foldable", "graspable"],
+            },
+            {
+                "name": "tray",
+                "role": "main",
+                "support_or_region": "table surface",
+                "states": ["empty"],
+                "affordance": ["container"],
+            },
+            {
+                "name": "robot arm",
+                "role": "other",
+                "support_or_region": "",
+                "states": ["visible"],
+                "affordance": [],
+            },
+        ],
+        SCENE_TEMPLATE,
+    )
+
+
 def annotation(subtasks):
     return {
         "schema_version": SCHEMA_VERSION,
         "template_set_version": TEMPLATE_SET_VERSION,
         "video_text": "机器人完成抽屉和杯子的操作",
+        "scene": scene(),
         "subtasks": subtasks,
     }
 
@@ -138,6 +180,12 @@ def main():
     if len(COORDINATION_MODES) != 6:
         raise AssertionError("coordination_modes.yaml should contain 6 modes")
     pass_case("coordination_modes.yaml 能加载")
+
+    if SCENE_TEMPLATE["template_id"] != "scene_basic_v1":
+        raise AssertionError("scene_templates.yaml template_id mismatch")
+    if set(extract_template_slots(SCENE_TEMPLATE["template"])) != set(SCENE_TEMPLATE["required_slots"]):
+        raise AssertionError("scene template slots mismatch required_slots")
+    pass_case("scene_templates.yaml 能加载且 slots 一致")
 
     for skill_id, skill in SKILLS.items():
         if set(extract_template_slots(skill["template"])) != set(skill["required_slots"]):
@@ -157,6 +205,18 @@ def main():
     if SKILLS["twist"]["enum_display_names"]["rotation_direction"]["clockwise"] != "顺时针":
         raise AssertionError("rotation_direction display name mismatch")
     pass_case("subject/placement/twist 枚举中文显示名能加载")
+
+    base_scene = scene()
+    expected_scene_text = (
+        "In bedroom at bed, blue towel, tray are located at blue towel at tray; "
+        "tray at table surface, blue towel unfolded; tray empty, "
+        "robot arm are visible."
+    )
+    if base_scene["text"] != expected_scene_text:
+        raise AssertionError(base_scene["text"])
+    if validate_scene(base_scene, SCENE_TEMPLATE):
+        raise AssertionError(validate_scene(base_scene, SCENE_TEMPLATE))
+    pass_case("scene.text 从 object 结构自动生成英文")
 
     base_pull = action("pull", pull_values())
     base_pick = action("pick", pick_values())
@@ -219,6 +279,23 @@ def main():
         "twist.rotation_direction 枚举校验有效",
         annotation([subtask(0, 10, "primary_with_support", [twist_action])]),
     )
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad.pop("scene")
+    assert_fail("缺 scene 报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["scene"]["text"] = "中文场景文本"
+    assert_fail("scene.text 非模板英文渲染时报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["scene"]["scene_location"]["anchor"] = ""
+    bad["scene"]["text"] = "In bedroom at , blue towel, tray are located at blue towel at tray; tray at table surface, blue towel unfolded; tray empty, robot arm are visible."
+    assert_fail("scene_location.anchor 为空时报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["scene"]["objects"][0]["affordance"] = "foldable"
+    assert_fail("objects.affordance 不是 list 时报错", bad)
 
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
     del bad["subtasks"][0]["actions"][0]["slots"]["destination_anchor"]

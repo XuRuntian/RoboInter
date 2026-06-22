@@ -1,0 +1,39 @@
+scene_template_version: scene_templates_v1
+template_id: scene_basic_v1
+
+template: "In [space] at [anchor], [main_objects] are located at [support_or_region], [object_states], [other_objects] are visible."
+ui_template: "在 [space] 的 [anchor] 处，[main_objects] 位于 [support_or_region]，[object_states]，[other_objects] 可见。"
+
+required_slots:
+  - space
+  - anchor
+  - main_objects
+  - support_or_region
+  - object_states
+  - other_objects
+
+slot_display_names:
+  space: 大空间/房间
+  anchor: 场景锚点
+  main_objects: 主要物体
+  support_or_region: 支撑物/区域
+  object_states: 物体状态
+  other_objects: 其他可见物体
+
+enum_constraints:
+  scene_level1: []
+  scene_level2: []
+  task_type: []
+  affordance: []
+
+enum_display_names:
+  scene_level1: {}
+  scene_level2: {}
+  task_type: {}
+  affordance: {}
+
+object_roles:
+  - id: main
+    display_name: 主要物体
+  - id: other
+    display_name: 其他可见物体

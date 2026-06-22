@@ -31,10 +31,16 @@ COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
 
-from skill_schema import load_coordination_modes, load_skill_templates, validate_annotation
+from skill_schema import (
+    load_coordination_modes,
+    load_scene_templates,
+    load_skill_templates,
+    validate_annotation,
+)
 
 TEMPLATE_SET_VERSION, SKILL_TEMPLATES = load_skill_templates()
 COORDINATION_MODES = load_coordination_modes()
+SCENE_TEMPLATE = load_scene_templates()
 
 
 def primary_video_path(task_id, video_info):
@@ -87,7 +93,7 @@ def save_user_history(user_name, mode, history, suffix=""):
 
 
 def validate_language_annotation(anno):
-    return validate_annotation(anno, SKILL_TEMPLATES, COORDINATION_MODES)
+    return validate_annotation(anno, SKILL_TEMPLATES, COORDINATION_MODES, SCENE_TEMPLATE)
 
 
 def get_diff(a, b):
