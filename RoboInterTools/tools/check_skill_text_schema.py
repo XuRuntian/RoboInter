@@ -129,9 +129,9 @@ def subtask(start, end, coordination_mode, actions):
 def scene():
     return build_scene_from_values(
         {
-            "scene_level1": "",
-            "scene_level2": "",
-            "task_type": "",
+            "scene_level1": "Household",
+            "scene_level2": "Bedroom",
+            "task_type": "deformable_object_arrangement",
             "space": "bedroom",
             "anchor": "bed",
         },
@@ -148,7 +148,7 @@ def scene():
                 "role": "main",
                 "support_or_region": "table surface",
                 "states": ["empty"],
-                "affordance": ["container"],
+                "affordance": ["container_like", "support_surface"],
             },
             {
                 "name": "robot arm",
@@ -185,6 +185,22 @@ def main():
         raise AssertionError("scene_templates.yaml template_id mismatch")
     if set(extract_template_slots(SCENE_TEMPLATE["template"])) != set(SCENE_TEMPLATE["required_slots"]):
         raise AssertionError("scene template slots mismatch required_slots")
+    if "Household" not in SCENE_TEMPLATE["enum_constraints"]["scene_level1"]:
+        raise AssertionError("scene_level1 enum missing Household")
+    if "Bedroom" not in SCENE_TEMPLATE["enum_constraints"]["scene_level2"]:
+        raise AssertionError("scene_level2 enum missing Bedroom")
+    if SCENE_TEMPLATE["enum_display_names"]["scene_level1"]["Household"] != "家庭生活":
+        raise AssertionError("scene_level1 display name mismatch")
+    if SCENE_TEMPLATE["enum_display_names"]["scene_level2"]["Bedroom"] != "卧室":
+        raise AssertionError("scene_level2 display name mismatch")
+    if "surface_cleaning" not in SCENE_TEMPLATE["enum_constraints"]["task_type"]:
+        raise AssertionError("task_type enum missing surface_cleaning")
+    if "foldable" not in SCENE_TEMPLATE["enum_constraints"]["affordance"]:
+        raise AssertionError("affordance enum missing foldable")
+    if SCENE_TEMPLATE["enum_display_names"]["task_type"]["surface_cleaning"] != "表面清洁":
+        raise AssertionError("task_type display name mismatch")
+    if SCENE_TEMPLATE["enum_display_names"]["affordance"]["foldable"] != "可折叠":
+        raise AssertionError("affordance display name mismatch")
     pass_case("scene_templates.yaml 能加载且 slots 一致")
 
     for skill_id, skill in SKILLS.items():

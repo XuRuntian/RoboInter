@@ -5,7 +5,8 @@ import re
 from PyQt5.QtCore import QPoint, QTimer, Qt
 import cv2
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, QMessageBox, QLineEdit, QDialogButtonBox, QTextEdit, QGridLayout,
-                             QLabel, QSlider, QDialog, QHBoxLayout, QFrame, QProgressDialog, QRadioButton, QPlainTextEdit, QComboBox, QCheckBox)
+                             QLabel, QSlider, QDialog, QHBoxLayout, QFrame, QProgressDialog, QRadioButton, QPlainTextEdit, QComboBox, QCheckBox,
+                             QListWidget, QListWidgetItem)
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor, QMouseEvent
 from PyQt5.QtCore import Qt, QRect, QPoint, pyqtSignal, QThread
 
@@ -168,7 +169,7 @@ class SceneInputDialog(QDialog):
     def create_affordance_editor(self, selected_values):
         affordance_values = SCENE_TEMPLATE.get("enum_constraints", {}).get("affordance", []) or []
         display_names = SCENE_TEMPLATE.get("enum_display_names", {}).get("affordance", {}) or {}
-        selected_values = set(selected_values or [])
+        selected_values = [value for value in affordance_values if value in set(selected_values or [])]
         if not affordance_values:
             editor = QLineEdit(self)
             editor.setPlaceholderText("英文逗号分隔，例如 foldable, graspable")
@@ -177,18 +178,62 @@ class SceneInputDialog(QDialog):
             editor.setFixedSize(210, 30)
             return editor
 
-        holder = QWidget(self)
-        layout = QHBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        holder.affordance_checks = []
-        for value in affordance_values:
-            label = display_names.get(value, value)
-            checkbox = QCheckBox(f"{label} ({value})", self)
-            checkbox.setChecked(value in selected_values)
-            checkbox.stateChanged.connect(self.update_preview)
-            holder.affordance_checks.append((checkbox, value))
-            layout.addWidget(checkbox)
-        return holder
+        button = QPushButton(self)
+        button.selected_affordance_values = selected_values
+        button.affordance_options = affordance_values
+        button.affordance_display_names = display_names
+        button.setFixedSize(210, 30)
+        button.clicked.connect(lambda: self.open_affordance_selector(button))
+        self.update_affordance_button_text(button)
+        return button
+
+    def update_affordance_button_text(self, button):
+        selected_values = getattr(button, "selected_affordance_values", [])
+        display_names = getattr(button, "affordance_display_names", {})
+        if not selected_values:
+            button.setText("选择属性")
+            button.setToolTip("")
+            return
+        display_items = [display_names.get(value, value) for value in selected_values]
+        button.setText(f"已选 {len(selected_values)} 项")
+        button.setToolTip(", ".join(
+            f"{display_names.get(value, value)} ({value})" for value in selected_values
+        ))
+
+    def open_affordance_selector(self, button):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择 affordance")
+        dialog.setFixedSize(520, 520)
+        layout = QVBoxLayout(dialog)
+
+        affordance_list = QListWidget(dialog)
+        affordance_list.setFixedSize(490, 430)
+        selected_values = set(getattr(button, "selected_affordance_values", []))
+        display_names = getattr(button, "affordance_display_names", {})
+        for value in getattr(button, "affordance_options", []):
+            item = QListWidgetItem(f"{display_names.get(value, value)} ({value})")
+            item.setData(Qt.UserRole, value)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if value in selected_values else Qt.Unchecked)
+            affordance_list.addItem(item)
+        layout.addWidget(affordance_list)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
+        button_box.button(QDialogButtonBox.Ok).setText("确定")
+        button_box.button(QDialogButtonBox.Cancel).setText("取消")
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec_() == QDialog.Accepted:
+            selected = []
+            for idx in range(affordance_list.count()):
+                item = affordance_list.item(idx)
+                if item.checkState() == Qt.Checked:
+                    selected.append(item.data(Qt.UserRole))
+            button.selected_affordance_values = selected
+            self.update_affordance_button_text(button)
+            self.update_preview()
 
     def set_combo_by_data(self, combo, value):
         for idx in range(combo.count()):
@@ -209,7 +254,7 @@ class SceneInputDialog(QDialog):
     def affordance_values(self, widget):
         if isinstance(widget, QLineEdit):
             return self.split_input_list(widget.text())
-        return [value for checkbox, value in getattr(widget, "affordance_checks", []) if checkbox.isChecked()]
+        return list(getattr(widget, "selected_affordance_values", []))
 
     def add_object_row(self, obj):
         row_idx = len(self.object_rows) + 1
