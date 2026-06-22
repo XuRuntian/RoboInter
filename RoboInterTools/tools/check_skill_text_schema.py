@@ -148,7 +148,7 @@ def scene():
                 "role": "main",
                 "support_or_region": "table surface",
                 "states": ["empty"],
-                "affordance": ["container_like", "support_surface"],
+                "affordance": ["receivable", "support_surface"],
             },
             {
                 "name": "robot arm",
@@ -207,11 +207,36 @@ def main():
         raise AssertionError("scene_level2 display name mismatch")
     if "surface_cleaning" not in SCENE_TEMPLATE["enum_constraints"]["task_type"]:
         raise AssertionError("task_type enum missing surface_cleaning")
-    if "foldable" not in SCENE_TEMPLATE["enum_constraints"]["affordance"]:
-        raise AssertionError("affordance enum missing foldable")
+    expected_affordance = [
+        "graspable",
+        "pushable",
+        "pullable",
+        "pressable",
+        "rotatable",
+        "pourable",
+        "receivable",
+        "cuttable",
+        "support_surface",
+        "slidable",
+        "insertable",
+        "insert_slot",
+        "foldable",
+        "deformable",
+        "shakeable",
+        "strikeable",
+        "throwable",
+        "tool_usable",
+        "hangable",
+        "openable",
+        "closable",
+        "wipeable",
+        "scrubbable",
+    ]
+    if SCENE_TEMPLATE["enum_constraints"]["affordance"] != expected_affordance:
+        raise AssertionError("affordance enum mismatch")
     if SCENE_TEMPLATE["enum_display_names"]["task_type"]["surface_cleaning"] != "表面清洁":
         raise AssertionError("task_type display name mismatch")
-    if SCENE_TEMPLATE["enum_display_names"]["affordance"]["foldable"] != "可折叠":
+    if SCENE_TEMPLATE["enum_display_names"]["affordance"]["receivable"] != "可接收液体/颗粒/物体":
         raise AssertionError("affordance display name mismatch")
     pass_case("scene_templates.yaml 能加载且 slots 一致")
 
