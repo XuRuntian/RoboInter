@@ -166,6 +166,18 @@ def annotation(subtasks):
     return {
         "schema_version": SCHEMA_VERSION,
         "template_set_version": TEMPLATE_SET_VERSION,
+        "episode": {
+            "episode_id": "chunk-000_episode_000003",
+            "task_id": "chunk-000_episode_000003",
+            "dataset_name": "Agilex_Cobot_Magic_fold_towel_blue_tray",
+            "video_path": "/data/videos/cam_head_rgb/episode_000003.mp4",
+            "primary_video_path": "/data/videos/cam_head_rgb/episode_000003.mp4",
+            "views": {
+                "cam_head_rgb": "/data/videos/cam_head_rgb/episode_000003.mp4",
+                "cam_left_wrist_rgb": "/data/videos/cam_left_wrist_rgb/episode_000003.mp4",
+            },
+            "frames": 21,
+        },
         "video_text": "机器人完成抽屉和杯子的操作",
         "scene": scene(),
         "subtasks": subtasks,
@@ -295,6 +307,14 @@ def main():
         "twist.rotation_direction 枚举校验有效",
         annotation([subtask(0, 10, "primary_with_support", [twist_action])]),
     )
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad.pop("episode")
+    assert_fail("缺 episode 报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["episode"]["frames"] = 0
+    assert_fail("episode.frames 非正数时报错", bad)
 
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
     bad.pop("scene")

@@ -118,6 +118,10 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
         if "primary_video_path" in zf.namelist():
             with zf.open("primary_video_path") as f:
                 primary_video_path = f.read().decode("utf-8")
+        episode_info = {}
+        if mode == 'lang' and "episode_info.json" in zf.namelist():
+            with zf.open("episode_info.json") as f:
+                episode_info = json.loads(f.read().decode("utf-8"))
         with zf.open("history_number") as f:
             history_number = int(f.read().decode("utf-8"))
 
@@ -159,7 +163,7 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
                one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, \
                three_anno_num, all_three_anno_num
     else:
-        return video_result, anno, save_path, primary_video_path, history_number, video_path
+        return video_result, anno, save_path, primary_video_path, history_number, video_path, episode_info
 
 
 def save_anno(ip, port, save_path, anno, metadata=None):

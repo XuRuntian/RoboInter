@@ -17,6 +17,15 @@ ACTION_ALLOWED_KEYS = {"subject", "skill", "slots", "text"}
 SUBTASK_ALLOWED_KEYS = {"start_frame", "end_frame", "coordination_mode", "actions", "text"}
 SCENE_OBJECT_ALLOWED_KEYS = {"name", "role", "support_or_region", "states", "affordance"}
 SCENE_LOCATION_ALLOWED_KEYS = {"space", "anchor"}
+EPISODE_ALLOWED_KEYS = {
+    "episode_id",
+    "task_id",
+    "dataset_name",
+    "video_path",
+    "primary_video_path",
+    "views",
+    "frames",
+}
 SCENE_ALLOWED_KEYS = {
     "scene_level1",
     "scene_level2",
@@ -26,7 +35,14 @@ SCENE_ALLOWED_KEYS = {
     "scene_location",
     "objects",
 }
-ANNOTATION_ALLOWED_KEYS = {"schema_version", "template_set_version", "video_text", "scene", "subtasks"}
+ANNOTATION_ALLOWED_KEYS = {
+    "schema_version",
+    "template_set_version",
+    "episode",
+    "video_text",
+    "scene",
+    "subtasks",
+}
 
 
 def load_yaml_file(path):
@@ -551,6 +567,44 @@ def validate_both_same_skill_same_object(actions, prefix):
     return None
 
 
+def validate_episode(episode, prefix="episode"):
+    if not isinstance(episode, dict):
+        return f"{prefix} 必须是 dict"
+
+    unknown_keys = set(episode) - EPISODE_ALLOWED_KEYS
+    if unknown_keys:
+        return f"{prefix} 出现未知字段: {sorted(unknown_keys)}"
+    missing_keys = EPISODE_ALLOWED_KEYS - set(episode)
+    if missing_keys:
+        return f"{prefix} 缺少字段: {sorted(missing_keys)}"
+
+    for field_name in ("episode_id", "task_id", "video_path", "primary_video_path"):
+        if not str(episode.get(field_name, "")).strip():
+            return f"{prefix} {field_name} 不能为空"
+
+    dataset_name = episode.get("dataset_name")
+    if dataset_name is None or not isinstance(dataset_name, str):
+        return f"{prefix} dataset_name 必须是字符串"
+
+    try:
+        frames = int(episode.get("frames"))
+    except (TypeError, ValueError):
+        return f"{prefix} frames 必须是正整数"
+    if frames <= 0:
+        return f"{prefix} frames 必须是正整数"
+
+    views = episode.get("views")
+    if not isinstance(views, dict):
+        return f"{prefix} views 必须是 dict"
+    for view_name, view_path in views.items():
+        if not str(view_name).strip():
+            return f"{prefix} views 不允许空 view name"
+        if not str(view_path).strip():
+            return f"{prefix} views[{view_name}] 路径不能为空"
+
+    return None
+
+
 def validate_annotation(annotation, skill_templates=None, coordination_modes=None, scene_template=None):
     if skill_templates is None:
         _, skill_templates = load_skill_templates()
@@ -573,6 +627,9 @@ def validate_annotation(annotation, skill_templates=None, coordination_modes=Non
         return f"schema_version 必须是 {SCHEMA_VERSION}"
     if annotation.get("template_set_version") != TEMPLATE_SET_VERSION:
         return f"template_set_version 必须是 {TEMPLATE_SET_VERSION}"
+    episode_error = validate_episode(annotation.get("episode"))
+    if episode_error:
+        return episode_error
     if not str(annotation.get("video_text", "")).strip():
         return "video_text 不能为空"
     scene_error = validate_scene(annotation.get("scene"), scene_template)

@@ -1176,6 +1176,7 @@ class VideoPlayer(QWidget):
         self.lang_only_anno = dict()
         self.video_path = None
         self.primary_video_path = None
+        self.episode_info = None
         self.frame_contact = set()
         
         self.next_video_and_load(is_first=True)
@@ -1565,6 +1566,53 @@ class VideoPlayer(QWidget):
                 self.finished.emit(res)
         video_thread = VideoThread(self)
         return video_thread
+
+    def infer_episode_id(self, task_id, primary_video_path):
+        if task_id and not os.path.exists(str(task_id)):
+            return os.path.basename(str(task_id).rstrip("/"))
+        if primary_video_path:
+            return os.path.splitext(os.path.basename(str(primary_video_path)))[0]
+        return os.path.splitext(os.path.basename(str(task_id)))[0]
+
+    def infer_dataset_name(self, primary_video_path):
+        path_parts = [
+            part for part in os.path.normpath(str(primary_video_path)).split(os.sep)
+            if part
+        ]
+        if "robocoin_data" in path_parts:
+            idx = path_parts.index("robocoin_data")
+            if idx + 1 < len(path_parts):
+                return path_parts[idx + 1]
+        for part in reversed(path_parts):
+            if part.startswith("lerobot_"):
+                return part.replace("lerobot_", "", 1)
+        return ""
+
+    def build_episode_info(self):
+        base_info = dict(self.episode_info or {})
+        task_id = str(base_info.get("task_id") or self.video_path or "")
+        primary_path = str(
+            base_info.get("primary_video_path")
+            or self.primary_video_path
+            or self.video_path
+            or ""
+        )
+        views = base_info.get("views") if isinstance(base_info.get("views"), dict) else {}
+        if not views and primary_path:
+            views = {"primary": primary_path}
+        return {
+            "episode_id": str(
+                base_info.get("episode_id") or self.infer_episode_id(task_id, primary_path)
+            ),
+            "task_id": task_id,
+            "dataset_name": str(
+                base_info.get("dataset_name") or self.infer_dataset_name(primary_path)
+            ),
+            "video_path": str(base_info.get("video_path") or task_id or primary_path),
+            "primary_video_path": primary_path,
+            "views": {str(name): str(path) for name, path in views.items()},
+            "frames": int(self.frame_count),
+        }
        
     def save_lang_anno(self):
         self.progress = QProgressDialog("请等待，正在储存标注结果...", None, 0, 0, self)
@@ -1589,6 +1637,7 @@ class VideoPlayer(QWidget):
         lang_res = {
             "schema_version": SCHEMA_VERSION,
             "template_set_version": TEMPLATE_SET_VERSION,
+            "episode": self.build_episode_info(),
             "video_text": video_text,
             "scene": self.scene_annotation,
             "subtasks": [],
@@ -1639,6 +1688,7 @@ class VideoPlayer(QWidget):
         self.progress.close()
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.episode_info = None
         return 0
 
     def validate_lang_clip_coverage(self):
@@ -1695,6 +1745,7 @@ class VideoPlayer(QWidget):
         self.update_keyframe_bar()
            
     def clear_video(self):
+        self.last_frame = None
         self.video_label.clear()
         self.video_views = None
         if hasattr(self, "video_view_labels"):
@@ -1703,18 +1754,20 @@ class VideoPlayer(QWidget):
                 label.setParent(None)
                 label.deleteLater()
             self.video_view_labels = {}
+        old_slider_block = self.progress_slider.blockSignals(True)
         self.progress_slider.setValue(0)
+        self.progress_slider.blockSignals(old_slider_block)
         self.frame_position_label.hide()
         self.keyframes = {}
         self.ori_video = {}
         self.selected_keyframe = None
         self.update_keyframe_bar()
         self.keyframe_bar.hide()
-        self.last_frame = None
         self.cur_frame_idx = 0
         self.current_frame = 0
         self.sam_object_id = [0] * self.frame_count
         self.max_point_num = dict()
+        self.episode_info = None
         # self.vis_ori.setChecked(True)
         self.lang_anno = dict()
         self.scene_annotation = None
@@ -1798,7 +1851,10 @@ class VideoPlayer(QWidget):
             video, save_path, video_path, hist_num, \
                 one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, three_anno_num, all_three_anno_num = res
         else:
-            if len(res) == 6:
+            episode_info = {}
+            if len(res) == 7:
+                video, lang, save_path, primary_video_path, hist_num, task_id, episode_info = res
+            elif len(res) == 6:
                 video, lang, save_path, primary_video_path, hist_num, task_id = res
             else:
                 video, lang, save_path, primary_video_path, hist_num = res
@@ -1806,6 +1862,8 @@ class VideoPlayer(QWidget):
             self.loaded_lang_annotation = (
                 lang if isinstance(lang, dict) and lang.get("schema_version") == SCHEMA_VERSION else None
             )
+            if not episode_info and self.loaded_lang_annotation:
+                episode_info = self.loaded_lang_annotation.get("episode") or {}
             self.video_2_lang = dict(
                 task_stepsC=dict(),
                 instructionC='',
@@ -1814,6 +1872,7 @@ class VideoPlayer(QWidget):
             )
             video_path = task_id
             self.primary_video_path = primary_video_path
+            self.episode_info = episode_info
         self.save_path = save_path
         self.video_path = video_path
         self.hist_num = hist_num
@@ -1946,8 +2005,14 @@ class VideoPlayer(QWidget):
             self.update_multiview_frame(frame_number)
             return
 
-        if  len(self.ori_video) == 0:
+        if len(self.ori_video) == 0:
             self.smart_message('请先加载视频！')
+            return
+        if isinstance(self.ori_video, dict):
+            self.smart_message('请先加载视频！')
+            return
+        if frame_number < 0 or frame_number >= len(self.ori_video):
+            self.smart_message('视频帧索引超出范围')
             return
         frame = self.ori_video[frame_number]
         self.height, self.width, channel = frame.shape

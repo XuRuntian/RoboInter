@@ -16,6 +16,7 @@ Output LMDB format (per-frame storage following formulation.py):
             "skill": "pick",
             "coordination_mode": "primary_with_support",
             "actions": [{"subject": "right_gripper", "skill": "pick", "slots": {...}}],
+            "episode": {"episode_id": "...", "views": {...}},
             "scene": {"scene_level1": "...", "objects": [...]},
             "segmentation": None,
             "object_box": [[x1,y1],[x2,y2]],
@@ -67,6 +68,7 @@ def normalize_skill_text_language(all_language):
         "skill_steps": primary_skills,
         "coordination_mode_steps": [subtask.get("coordination_mode") for subtask in subtasks],
         "actions_steps": [subtask.get("actions") for subtask in subtasks],
+        "episode": all_language.get("episode"),
         "scene": all_language.get("scene"),
     }
 
@@ -239,6 +241,7 @@ def convert_single_item(key, inter_data, data_lmdb_path):
     skill_steps = language_source.get('skill_steps', []) if language_source else None
     coordination_mode_steps = language_source.get('coordination_mode_steps', []) if language_source else None
     actions_steps = language_source.get('actions_steps', []) if language_source else None
+    episode = language_source.get('episode') if language_source else None
     scene = language_source.get('scene') if language_source else None
 
     # Get origin_shape
@@ -271,6 +274,7 @@ def convert_single_item(key, inter_data, data_lmdb_path):
             'skill': None,
             'coordination_mode': None,
             'actions': None,
+            'episode': episode,
             'scene': scene,
             'segmentation': None,  # not stored for now
             'object_box': None,

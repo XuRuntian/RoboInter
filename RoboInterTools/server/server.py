@@ -49,6 +49,45 @@ def primary_video_path(task_id, video_info):
     return task_id
 
 
+def infer_episode_id(task_id, primary_path):
+    if task_id and not os.path.exists(task_id):
+        return os.path.basename(str(task_id).rstrip("/"))
+    if primary_path:
+        return os.path.splitext(os.path.basename(primary_path))[0]
+    return os.path.splitext(os.path.basename(str(task_id)))[0]
+
+
+def infer_dataset_name(primary_path):
+    path_parts = [part for part in os.path.normpath(str(primary_path)).split(os.sep) if part]
+    if "robocoin_data" in path_parts:
+        idx = path_parts.index("robocoin_data")
+        if idx + 1 < len(path_parts):
+            return path_parts[idx + 1]
+    for part in reversed(path_parts):
+        if part.startswith("lerobot_"):
+            return part.replace("lerobot_", "", 1)
+    return ""
+
+
+def build_episode_info(task_id, video_info):
+    primary_path = primary_video_path(task_id, video_info)
+    views = {}
+    if isinstance(video_info, dict):
+        views = dict(video_info.get("views") or {})
+    if not views and primary_path:
+        views = {"primary": primary_path}
+
+    return {
+        "episode_id": infer_episode_id(task_id, primary_path),
+        "task_id": str(task_id),
+        "dataset_name": infer_dataset_name(primary_path),
+        "video_path": str(task_id) if os.path.exists(str(task_id)) else str(primary_path),
+        "primary_video_path": str(primary_path),
+        "views": views,
+        "frames": 0,
+    }
+
+
 def load_server_config(config_path="./config/config.yaml"):
     """Load server configuration from yaml file."""
     global CONFIG, ROOT_DIR, PATHS
@@ -254,6 +293,7 @@ def get_video_lang():
             zf.writestr("save_path", save_path)
             zf.writestr("video_path", task_id)
             zf.writestr("primary_video_path", primary_video_path(task_id, video_info))
+            zf.writestr("episode_info.json", json.dumps(build_episode_info(task_id, video_info)))
             zf.writestr("history_number", str(len(history)))
 
     zip_io.seek(0)
