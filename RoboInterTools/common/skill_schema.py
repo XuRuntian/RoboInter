@@ -27,8 +27,6 @@ EPISODE_ALLOWED_KEYS = {
     "frames",
 }
 SCENE_ALLOWED_KEYS = {
-    "scene_level1",
-    "scene_level2",
     "task_type",
     "template_id",
     "text",
@@ -259,8 +257,6 @@ def render_scene_text(scene, scene_template):
 
 def build_scene_from_values(scene_values, objects, scene_template):
     scene = {
-        "scene_level1": str(scene_values.get("scene_level1", "")).strip(),
-        "scene_level2": str(scene_values.get("scene_level2", "")).strip(),
         "task_type": str(scene_values.get("task_type", "")).strip(),
         "template_id": scene_template["template_id"],
         "scene_location": {
@@ -325,7 +321,7 @@ def validate_scene(scene, scene_template=None, prefix="scene"):
     if not str(scene_location.get("anchor", "")).strip():
         return f"{prefix}.scene_location anchor 不能为空"
 
-    for enum_field in ("scene_level1", "scene_level2", "task_type"):
+    for enum_field in ("task_type",):
         error = validate_scene_enum(enum_field, scene.get(enum_field, ""), scene_template, prefix)
         if error:
             return error

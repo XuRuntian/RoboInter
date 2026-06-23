@@ -56,6 +56,15 @@ def get_subtask_display(subtask):
     return subtask.get("text", ""), primary_skill, ""
 
 
+def strip_legacy_scene_fields(scene):
+    if not isinstance(scene, dict):
+        return scene
+    return {
+        key: value for key, value in scene.items()
+        if key not in ("scene_level1", "scene_level2")
+    }
+
+
 class SceneInputDialog(QDialog):
 
     def __init__(self, initial_scene=None, parent=None):
@@ -69,8 +78,6 @@ class SceneInputDialog(QDialog):
         self.main_layout.addLayout(self.form_layout)
 
         initial_scene = initial_scene if isinstance(initial_scene, dict) else {}
-        self.scene_level1_select = self.create_enum_combo("scene_level1", initial_scene.get("scene_level1", ""))
-        self.scene_level2_select = self.create_enum_combo("scene_level2", initial_scene.get("scene_level2", ""))
         self.task_type_select = self.create_enum_combo("task_type", initial_scene.get("task_type", ""))
         initial_location = initial_scene.get("scene_location") or {}
         if not initial_location and initial_scene.get("scene_area"):
@@ -85,12 +92,6 @@ class SceneInputDialog(QDialog):
         self.scene_anchor_input.textChanged.connect(self.update_preview)
 
         row = 0
-        self.form_layout.addWidget(QLabel("一级场景:", self), row, 0)
-        self.form_layout.addWidget(self.scene_level1_select, row, 1)
-        row += 1
-        self.form_layout.addWidget(QLabel("二级场景:", self), row, 0)
-        self.form_layout.addWidget(self.scene_level2_select, row, 1)
-        row += 1
         self.form_layout.addWidget(QLabel("任务类型:", self), row, 0)
         self.form_layout.addWidget(self.task_type_select, row, 1)
         row += 1
@@ -333,8 +334,6 @@ class SceneInputDialog(QDialog):
 
     def collect_scene_values(self):
         return {
-            "scene_level1": self.combo_value(self.scene_level1_select),
-            "scene_level2": self.combo_value(self.scene_level2_select),
             "task_type": self.combo_value(self.task_type_select),
             "space": self.scene_space_input.text().strip(),
             "anchor": self.scene_anchor_input.text().strip(),
@@ -1633,13 +1632,15 @@ class VideoPlayer(QWidget):
             self.progress.close()
             self.smart_message("请先完成场景标注")
             return -1
+        scene_annotation = strip_legacy_scene_fields(self.scene_annotation)
+        self.scene_annotation = scene_annotation
 
         lang_res = {
             "schema_version": SCHEMA_VERSION,
             "template_set_version": TEMPLATE_SET_VERSION,
             "episode": self.build_episode_info(),
             "video_text": video_text,
-            "scene": self.scene_annotation,
+            "scene": scene_annotation,
             "subtasks": [],
         }
         clip_items = sorted((key, value) for key, value in self.lang_anno.items() if key != (0, 0))
@@ -1975,7 +1976,7 @@ class VideoPlayer(QWidget):
                     self.lang_anno[(0, 0)] = video_text
                 loaded_scene = self.loaded_lang_annotation.get("scene")
                 if isinstance(loaded_scene, dict):
-                    self.scene_annotation = loaded_scene
+                    self.scene_annotation = strip_legacy_scene_fields(loaded_scene)
                 for subtask in self.loaded_lang_annotation.get("subtasks", []):
                     try:
                         start_frame = int(subtask["start_frame"])
@@ -2728,8 +2729,6 @@ class VideoPlayer(QWidget):
         scene_location = self.scene_annotation.get("scene_location") or {}
         self.scene_lang_input.setText(
             f"场景标注: {self.scene_annotation.get('text', '')}\n"
-            f"一级场景: {self.scene_annotation.get('scene_level1', '')} | "
-            f"二级场景: {self.scene_annotation.get('scene_level2', '')} | "
             f"任务类型: {self.scene_annotation.get('task_type', '')} | "
             f"空间: {scene_location.get('space', '')} | "
             f"锚点: {scene_location.get('anchor', '')} | "

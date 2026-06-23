@@ -129,8 +129,6 @@ def subtask(start, end, coordination_mode, actions):
 def scene():
     return build_scene_from_values(
         {
-            "scene_level1": "Household",
-            "scene_level2": "Bedroom",
             "task_type": "deformable_object_arrangement",
             "space": "bedroom",
             "anchor": "bed",
@@ -197,14 +195,10 @@ def main():
         raise AssertionError("scene_templates.yaml template_id mismatch")
     if set(extract_template_slots(SCENE_TEMPLATE["template"])) != set(SCENE_TEMPLATE["required_slots"]):
         raise AssertionError("scene template slots mismatch required_slots")
-    if "Household" not in SCENE_TEMPLATE["enum_constraints"]["scene_level1"]:
-        raise AssertionError("scene_level1 enum missing Household")
-    if "Bedroom" not in SCENE_TEMPLATE["enum_constraints"]["scene_level2"]:
-        raise AssertionError("scene_level2 enum missing Bedroom")
-    if SCENE_TEMPLATE["enum_display_names"]["scene_level1"]["Household"] != "家庭生活":
-        raise AssertionError("scene_level1 display name mismatch")
-    if SCENE_TEMPLATE["enum_display_names"]["scene_level2"]["Bedroom"] != "卧室":
-        raise AssertionError("scene_level2 display name mismatch")
+    if "scene_level1" in SCENE_TEMPLATE["enum_constraints"]:
+        raise AssertionError("scene_level1 enum should be removed")
+    if "scene_level2" in SCENE_TEMPLATE["enum_constraints"]:
+        raise AssertionError("scene_level2 enum should be removed")
     if "surface_cleaning" not in SCENE_TEMPLATE["enum_constraints"]["task_type"]:
         raise AssertionError("task_type enum missing surface_cleaning")
     expected_affordance = [
@@ -344,6 +338,10 @@ def main():
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
     bad.pop("scene")
     assert_fail("缺 scene 报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["scene"]["scene_level1"] = "Household"
+    assert_fail("scene_level1 冗余字段报错", bad)
 
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
     bad["scene"]["text"] = "中文场景文本"
