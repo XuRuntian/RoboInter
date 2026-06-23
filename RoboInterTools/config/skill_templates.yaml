@@ -78,7 +78,7 @@ skills:
       - source_anchor
       - destination_anchor
     enum_constraints: {}
-    end_frame_definition: "物体到达目标区域并明显停止/减速的帧"
+    end_frame_definition: "物体停止被转移的第一帧"
 
   - id: pick
     display_name: 抓起
@@ -91,7 +91,7 @@ skills:
       - grasp_anchor
       - grasp_method
     enum_constraints: {}
-    end_frame_definition: "稳定夹取的帧"
+    end_frame_definition: "夹取稳定将要移动的第一帧"
 
   - id: place
     display_name: 放置
@@ -113,7 +113,7 @@ skills:
         - against
         - hang_on
         - back_to
-    end_frame_definition: "夹爪与物体接触关系消失的那一帧"
+    end_frame_definition: "夹爪与物体接触关系消失的第一帧"
 
   - id: press
     display_name: 按压
@@ -127,7 +127,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "目标被按下或状态变化生效的第一帧"
+    end_frame_definition: "目标被稳定按下之后将要释放或状态变化生效的第一帧"
 
   - id: push
     display_name: 推动
@@ -142,7 +142,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "被推动对象开始发生明显位移的第一帧"
+    end_frame_definition: "施加推力结束的第一帧"
 
   - id: pull
     display_name: 拉动
@@ -157,7 +157,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "被拉对象开始发生明显位移的第一帧"
+    end_frame_definition: "拉力结束的第一帧"
 
   - id: twist
     display_name: 旋转
@@ -174,7 +174,7 @@ skills:
       rotation_direction:
         - clockwise
         - counterclockwise
-    end_frame_definition: "目标开始发生明显旋转的第一帧"
+    end_frame_definition: "目标旋转结束的第一帧"
 
   - id: pour
     display_name: 倾倒
@@ -189,7 +189,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "液体或颗粒第一次离开源容器的帧"
+    end_frame_definition: "倾倒结束的第一帧"
 
   - id: fold
     display_name: 折叠
@@ -204,7 +204,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "折痕形成或折叠状态稳定的帧"
+    end_frame_definition: "折叠步骤完成的第一帧"
 
   - id: slide
     display_name: 滑动
@@ -217,7 +217,7 @@ skills:
       - source_anchor
       - destination_anchor
     enum_constraints: {}
-    end_frame_definition: "物体开始沿支撑面发生连续滑动的第一帧"
+    end_frame_definition: "物体结束滑行力供给的第一帧"
 
   - id: insert
     display_name: 插入
@@ -231,7 +231,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "物体进入孔/槽/容器并保持插入关系的第一帧"
+    end_frame_definition: "机器人完成插入稳定的第一帧"
 
   - id: shake
     display_name: 摇晃
@@ -244,7 +244,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "第一次明显往复摇晃开始的帧"
+    end_frame_definition: "摇晃结束的第一帧"
 
   - id: strike
     display_name: 敲击
@@ -258,7 +258,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "工具/末端与目标发生有效撞击的帧"
+    end_frame_definition: "工具/末端与目标发生有效撞击的帧之后工具将要离开的第一帧"
 
   - id: throw
     display_name: 抛出
@@ -269,7 +269,7 @@ skills:
       - manipulated_object
       - destination_anchor
     enum_constraints: {}
-    end_frame_definition: "夹爪释放物体的帧"
+    end_frame_definition: "物体离开夹爪的第一帧"
 
   - id: navigate
     display_name: 移动/导航
@@ -280,7 +280,7 @@ skills:
       - source_anchor
       - destination_anchor
     enum_constraints: {}
-    end_frame_definition: "到达目标位置并停止/明显减速的帧"
+    end_frame_definition: "机器人停止施加移动力的第一帧"
 
   - id: wipe_scrub
     display_name: 擦拭/刷洗
@@ -294,7 +294,7 @@ skills:
       - changed_object
       - state_change
     enum_constraints: {}
-    end_frame_definition: "有效擦拭/刷洗开始，或清洁状态变化的关键帧"
+    end_frame_definition: "擦洗结束的第一帧"
 
   - id: manipulate
     display_name: 其他操作

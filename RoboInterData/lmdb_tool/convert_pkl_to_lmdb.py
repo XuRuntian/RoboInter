@@ -17,7 +17,11 @@ Output LMDB format (per-frame storage following formulation.py):
             "coordination_mode": "primary_with_support",
             "actions": [{"subject": "right_gripper", "skill": "pick", "slots": {...}}],
             "episode": {"episode_id": "...", "views": {...}},
-            "scene": {"scene_level1": "...", "objects": [...]},
+            "scene": {
+                "task_type": "...",
+                "scene_location": {"space": "...", "anchor": "..."},
+                "objects": [...]
+            },
             "segmentation": None,
             "object_box": [[x1,y1],[x2,y2]],
             "placement_proposal": [[x1,y1],[x2,y2]],
