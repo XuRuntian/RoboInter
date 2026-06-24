@@ -52,6 +52,39 @@ snapshot_download(
 - `demo_data/` — LMDB 标注数据库
 - `videos/` — 视频文件（`.mp4`）
 
+### 2.1 配置数据路径
+
+默认情况下，程序会优先读取当前项目下的 `demo_data/` 和 `videos/` 目录。
+如果本地目录不存在，会使用 `config.py` 中的 `DEFAULT_EXTERNAL_DATA_ROOT` 作为兜底路径：
+
+```python
+DEFAULT_EXTERNAL_DATA_ROOT = "/home/baai/RoboInter/lerobot_build_with_block_312/human_anno_lang"
+```
+
+如果需要永久指向新的数据目录，直接修改 `config.py` 中的这个值即可。目录结构应为：
+
+```text
+/your/data/root/
+├── demo_data/
+│   ├── data.mdb
+│   └── lock.mdb
+└── videos/
+    └── *.mp4
+```
+
+如果只是临时指定路径，也可以在启动时设置环境变量，不需要改代码：
+
+```bash
+ROBOINTER_LMDB_PATH=/your/data/root/demo_data \
+ROBOINTER_VIDEO_ROOT=/your/data/root/videos \
+ROBOINTER_EPISODE_METADATA_ROOT=/your/data/root \
+python app.py
+```
+
+`ROBOINTER_EPISODE_METADATA_ROOT` 只在使用 episode 级 `.npz` 元数据时需要，
+例如右侧的 `Episode Metadata` 面板。如果要永久修改这个默认路径，请更新
+`episode_metadata.py` 中的 `DEFAULT_METADATA_ROOT`。
+
 ### 3. 安装依赖
 
 ```bash

@@ -9,6 +9,7 @@ import time
 
 # ==================== Load from Config ====================
 from config import VIDEO_ROOT, ANNOTATIONS
+from episode_metadata import format_episode_metadata, get_episode_metadata
 
 # ==================== Color Configuration ====================
 COLORS = {
@@ -493,6 +494,24 @@ def create_app():
             font-family: monospace;
             line-height: 1.6;
         }
+        .episode-metadata-box {
+            border: 1px solid #d7dee8;
+            border-left: 4px solid #2f6f9f;
+            border-radius: 8px;
+            padding: 14px 16px;
+            background: #f8fafc;
+            max-height: 360px;
+            overflow-y: auto;
+            line-height: 1.55;
+            font-size: 14px;
+        }
+        .episode-metadata-box h2 {
+            font-size: 16px;
+            margin: 12px 0 8px;
+        }
+        .episode-metadata-box h2:first-child {
+            margin-top: 0;
+        }
         """
     ) as app:
         # State
@@ -501,6 +520,7 @@ def create_app():
         current_mode = gr.State(value="original")
         current_video_path = gr.State(value=None)  # Current generated video path
         current_language_mode = gr.State(value=None)  # Current language annotation mode
+        current_episode_metadata = gr.State(value=None)
 
         gr.Markdown("# 🎬 Video Annotation Visualizer")
         gr.Markdown("Visualize various annotations on video frames")
@@ -554,6 +574,12 @@ def create_app():
                     elem_classes=["language-box"]
                 )
 
+                episode_metadata_panel = gr.Markdown(
+                    value="",
+                    visible=False,
+                    elem_classes=["episode-metadata-box"]
+                )
+
                 # Info display
                 info_text = gr.Textbox(
                     label="Annotation Info",
@@ -585,6 +611,8 @@ def create_app():
                 with gr.Row():
                     primitive_btn = gr.Button("⚡ Primitive Skill", elem_classes=["annotation-btn"], size="sm")
                     goto_contact_btn = gr.Button("➡️ Contact Frame", variant="secondary", size="sm")
+                with gr.Row():
+                    episode_metadata_btn = gr.Button("🧾 Episode Metadata", elem_classes=["annotation-btn"], size="sm")
 
                 gr.Markdown("#### 🎨 Visual")
                 with gr.Row():
@@ -605,6 +633,7 @@ def create_app():
         def load_video(video_name):
             """Load video"""
             frames = load_video_frames(video_name)
+            episode_metadata = get_episode_metadata(video_name)
             max_frame = len(frames) - 1 if frames else 0
             info = f"Loaded video: {video_name} ({len(frames)} frames)" if frames else "Failed to load video"
             # Get the first frame as initial display
@@ -617,7 +646,8 @@ def create_app():
                 info,
                 "original",
                 None,  # Clear video path
-                None   # Clear language mode
+                None,  # Clear language mode
+                episode_metadata
             )
 
         def random_video(current_video_name):
@@ -769,8 +799,12 @@ def create_app():
             (primitive_btn, "primitive_skill"),
         ]
 
+        metadata_buttons = [
+            (episode_metadata_btn, "episode_metadata"),
+        ]
+
         # Combined list of all buttons
-        all_buttons = mode_buttons + language_buttons
+        all_buttons = mode_buttons + language_buttons + metadata_buttons
 
         def update_button_styles(selected_mode):
             """Update all button styles, highlight selected button"""
@@ -785,10 +819,10 @@ def create_app():
         video_dropdown.change(
             load_video,
             inputs=[video_dropdown],
-            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, current_mode, current_video_path, current_language_mode]
+            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, current_mode, current_video_path, current_language_mode, current_episode_metadata]
         ).then(
-            lambda: tuple(update_button_styles("original")) + (gr.update(visible=False),),
-            outputs=[b for b, _ in all_buttons] + [language_text]
+            lambda: tuple(update_button_styles("original")) + (gr.update(visible=False), gr.update(visible=False)),
+            outputs=[b for b, _ in all_buttons] + [language_text, episode_metadata_panel]
         ).then(
             generate_or_play_video,
             inputs=[current_video, current_mode, frames_cache, video_fps, current_video_path],
@@ -813,13 +847,13 @@ def create_app():
                     # Update current frame display
                     img = update_current_frame(video_name, frames, frame_idx, m)
                     # Switch to Video Player tab (index 0)
-                    return (m, None, gr.update(visible=False), None, img, gr.Tabs(selected=0)) + tuple(update_button_styles(m))
+                    return (m, None, gr.update(visible=False), gr.update(visible=False), None, img, gr.Tabs(selected=0)) + tuple(update_button_styles(m))
                 return handler
 
             btn.click(
                 create_visual_handler(mode),
                 inputs=[current_video, frames_cache, frame_slider],
-                outputs=[current_mode, current_video_path, language_text, current_language_mode, frame_image, view_tabs] + [b for b, _ in all_buttons]
+                outputs=[current_mode, current_video_path, language_text, episode_metadata_panel, current_language_mode, frame_image, view_tabs] + [b for b, _ in all_buttons]
             ).then(
                 generate_or_play_video,
                 inputs=[current_video, current_mode, frames_cache, video_fps, current_video_path],
@@ -832,14 +866,31 @@ def create_app():
                 def handler(video_name, frames, frame_idx):
                     text, visible = get_current_frame_language(video_name, frames, frame_idx, lt)
                     # Switch to Frame Viewer tab (index 1)
-                    return tuple(update_button_styles(lt)) + (gr.update(value=text, visible=visible), lt, gr.Tabs(selected=1))
+                    return tuple(update_button_styles(lt)) + (gr.update(value=text, visible=visible), gr.update(visible=False), lt, gr.Tabs(selected=1))
                 return handler
 
             btn.click(
                 create_language_handler(lang_type),
                 inputs=[current_video, frames_cache, frame_slider],
-                outputs=[b for b, _ in all_buttons] + [language_text, current_language_mode, view_tabs]
+                outputs=[b for b, _ in all_buttons] + [language_text, episode_metadata_panel, current_language_mode, view_tabs]
             )
+
+        def show_episode_metadata(video_name, metadata):
+            """Show episode-level metadata for the selected video."""
+            if metadata is None:
+                metadata = get_episode_metadata(video_name)
+            text = format_episode_metadata(metadata)
+            return tuple(update_button_styles("episode_metadata")) + (
+                gr.update(value=text, visible=True),
+                gr.update(visible=False),
+                None,
+            )
+
+        episode_metadata_btn.click(
+            show_episode_metadata,
+            inputs=[current_video, current_episode_metadata],
+            outputs=[b for b, _ in all_buttons] + [episode_metadata_panel, language_text, current_language_mode]
+        )
 
         # Frame slider event: update both image and language annotation
         def update_on_frame_change(video_name, frames, frame_idx, mode, lang_mode):
@@ -864,23 +915,23 @@ def create_app():
         # Special button: Jump to contact frame (switch to Frame Viewer, hide Language Annotation)
         def goto_contact_with_tab_switch(video_name, frames, fps):
             frame_idx, info = goto_contact_frame(video_name, frames, fps)
-            return frame_idx, info, gr.Tabs(selected=1), gr.update(visible=False), None
+            return frame_idx, info, gr.Tabs(selected=1), gr.update(visible=False), gr.update(visible=False), None
 
         goto_contact_btn.click(
             goto_contact_with_tab_switch,
             inputs=[current_video, frames_cache, video_fps],
-            outputs=[frame_slider, info_text, view_tabs, language_text, current_language_mode]
+            outputs=[frame_slider, info_text, view_tabs, language_text, episode_metadata_panel, current_language_mode]
         )
 
         # Contact Points button: switch mode (switch to Video Player, auto-generate video)
         def switch_to_contact_points_with_frame(video_name, frames, frame_idx):
             img = update_current_frame(video_name, frames, frame_idx, "contact_points")
-            return tuple(update_button_styles("contact_points")) + (gr.update(visible=False), None, "contact_points", None, img, gr.Tabs(selected=0))
+            return tuple(update_button_styles("contact_points")) + (gr.update(visible=False), gr.update(visible=False), None, "contact_points", None, img, gr.Tabs(selected=0))
 
         contact_points_btn.click(
             switch_to_contact_points_with_frame,
             inputs=[current_video, frames_cache, frame_slider],
-            outputs=[b for b, _ in all_buttons] + [language_text, current_language_mode, current_mode, current_video_path, frame_image, view_tabs]
+            outputs=[b for b, _ in all_buttons] + [language_text, episode_metadata_panel, current_language_mode, current_mode, current_video_path, frame_image, view_tabs]
         ).then(
             generate_or_play_video,
             inputs=[current_video, current_mode, frames_cache, video_fps, current_video_path],
@@ -890,12 +941,12 @@ def create_app():
         # Affordance Box button: switch mode (switch to Video Player, auto-generate video)
         def switch_to_affordance_with_frame(video_name, frames, frame_idx):
             img = update_current_frame(video_name, frames, frame_idx, "affordance_box")
-            return tuple(update_button_styles("affordance_box")) + (gr.update(visible=False), None, "affordance_box", None, img, gr.Tabs(selected=0))
+            return tuple(update_button_styles("affordance_box")) + (gr.update(visible=False), gr.update(visible=False), None, "affordance_box", None, img, gr.Tabs(selected=0))
 
         affordance_btn.click(
             switch_to_affordance_with_frame,
             inputs=[current_video, frames_cache, frame_slider],
-            outputs=[b for b, _ in all_buttons] + [language_text, current_language_mode, current_mode, current_video_path, frame_image, view_tabs]
+            outputs=[b for b, _ in all_buttons] + [language_text, episode_metadata_panel, current_language_mode, current_mode, current_video_path, frame_image, view_tabs]
         ).then(
             generate_or_play_video,
             inputs=[current_video, current_mode, frames_cache, video_fps, current_video_path],
@@ -905,12 +956,12 @@ def create_app():
         # Grasp Pose button: switch mode (logic same as Affordance)
         def switch_to_grasp_pose_with_frame(video_name, frames, frame_idx):
             img = update_current_frame(video_name, frames, frame_idx, "grasp_pose")
-            return tuple(update_button_styles("grasp_pose")) + (gr.update(visible=False), None, "grasp_pose", None, img, gr.Tabs(selected=0))
+            return tuple(update_button_styles("grasp_pose")) + (gr.update(visible=False), gr.update(visible=False), None, "grasp_pose", None, img, gr.Tabs(selected=0))
 
         grasp_pose_btn.click(
             switch_to_grasp_pose_with_frame,
             inputs=[current_video, frames_cache, frame_slider],
-            outputs=[b for b, _ in all_buttons] + [language_text, current_language_mode, current_mode, current_video_path, frame_image, view_tabs]
+            outputs=[b for b, _ in all_buttons] + [language_text, episode_metadata_panel, current_language_mode, current_mode, current_video_path, frame_image, view_tabs]
         ).then(
             generate_or_play_video,
             inputs=[current_video, current_mode, frames_cache, video_fps, current_video_path],
@@ -921,10 +972,10 @@ def create_app():
         app.load(
             load_video,
             inputs=[video_dropdown],
-            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, current_mode, current_video_path, current_language_mode]
+            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, current_mode, current_video_path, current_language_mode, current_episode_metadata]
         ).then(
-            lambda: tuple(update_button_styles("original")) + (gr.update(visible=False),),
-            outputs=[b for b, _ in all_buttons] + [language_text]
+            lambda: tuple(update_button_styles("original")) + (gr.update(visible=False), gr.update(visible=False)),
+            outputs=[b for b, _ in all_buttons] + [language_text, episode_metadata_panel]
         ).then(
             generate_or_play_video,
             inputs=[current_video, current_mode, frames_cache, video_fps, current_video_path],

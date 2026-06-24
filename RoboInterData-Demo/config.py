@@ -3,13 +3,39 @@ import lmdb
 import pickle
 import os
 
+DEFAULT_EXTERNAL_DATA_ROOT = "/home/baai/RoboInter/lerobot_build_with_block_312/human_anno_lang"
+
+
+def resolve_existing_path(env_var, local_path, fallback_path=None):
+    """Resolve a data path with environment override, local default, then fallback."""
+    env_path = os.environ.get(env_var)
+    if env_path:
+        return env_path
+
+    if os.path.exists(local_path):
+        return local_path
+
+    if fallback_path and os.path.exists(fallback_path):
+        return fallback_path
+
+    return local_path
+
+
 # LMDB database path
-LMDB_PATH = "demo_data"
+LMDB_PATH = resolve_existing_path(
+    "ROBOINTER_LMDB_PATH",
+    "demo_data",
+    os.path.join(DEFAULT_EXTERNAL_DATA_ROOT, "demo_data"),
+)
 
 # Video file root directory - modify this to your video storage path
 # Video files should be named as: {video_name}.mp4
 # Example: 11947_exterior_image_1_left.mp4
-VIDEO_ROOT = "videos"
+VIDEO_ROOT = resolve_existing_path(
+    "ROBOINTER_VIDEO_ROOT",
+    "videos",
+    os.path.join(DEFAULT_EXTERNAL_DATA_ROOT, "videos"),
+)
 
 # Coordinate scaling function
 def scale_coordinates(annotations, scale_x=4.0, scale_y=4.0):

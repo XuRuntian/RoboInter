@@ -52,6 +52,40 @@ This will download:
 - `demo_data/` — LMDB database containing all annotations
 - `videos/` — video files (`.mp4`)
 
+### 2.1 Configure data paths
+
+By default, the app first looks for local `demo_data/` and `videos/` directories.
+If they do not exist, it falls back to `DEFAULT_EXTERNAL_DATA_ROOT` in `config.py`:
+
+```python
+DEFAULT_EXTERNAL_DATA_ROOT = "/home/baai/RoboInter/lerobot_build_with_block_312/human_anno_lang"
+```
+
+To permanently point the project at another dataset location, edit this value in
+`config.py`. The expected layout is:
+
+```text
+/your/data/root/
+├── demo_data/
+│   ├── data.mdb
+│   └── lock.mdb
+└── videos/
+    └── *.mp4
+```
+
+For a one-off run without editing the file, set environment variables:
+
+```bash
+ROBOINTER_LMDB_PATH=/your/data/root/demo_data \
+ROBOINTER_VIDEO_ROOT=/your/data/root/videos \
+ROBOINTER_EPISODE_METADATA_ROOT=/your/data/root \
+python app.py
+```
+
+`ROBOINTER_EPISODE_METADATA_ROOT` is only needed when using episode-level `.npz`
+metadata such as the `Episode Metadata` panel. To change that default
+permanently, update `DEFAULT_METADATA_ROOT` in `episode_metadata.py`.
+
 ### 3. Install dependencies
 
 ```bash
