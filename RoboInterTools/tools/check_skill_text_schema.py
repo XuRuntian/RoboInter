@@ -116,6 +116,12 @@ def twist_values():
     }
 
 
+def none_values():
+    return {
+        "subject": "both_arms",
+    }
+
+
 def subtask(start, end, coordination_mode, actions):
     return {
         "start_frame": start,
@@ -253,6 +259,12 @@ def main():
         raise AssertionError("rotation_direction display name mismatch")
     pass_case("subject/placement/twist 枚举中文显示名能加载")
 
+    if SKILLS["none"]["display_name"] != "无任务相关操作":
+        raise AssertionError("none display name mismatch")
+    if SKILLS["none"]["required_slots"] != ["subject"]:
+        raise AssertionError("none required slots mismatch")
+    pass_case("none skill 能加载")
+
     base_scene = scene()
     expected_scene_text = (
         "In bedroom at bed, blue towel, tray are located at blue towel at tray; "
@@ -274,6 +286,12 @@ def main():
     if base_pull["text"] != expected_pull_text:
         raise AssertionError(base_pull["text"])
     pass_case("action.text 自动生成正确")
+
+    none_action = action("none", none_values())
+    expected_none_text = "both_arms performs no task-relevant manipulation"
+    if none_action["text"] != expected_none_text:
+        raise AssertionError(none_action["text"])
+    pass_case("none action.text 自动生成正确")
 
     two_action_text = render_subtask_text([base_pull, base_pick])
     if "; meanwhile " not in two_action_text:
@@ -314,6 +332,17 @@ def main():
     assert_ok(
         "primary_with_support 下单 action 可以保存",
         annotation([subtask(0, 10, "primary_with_support", [base_pull])]),
+    )
+    assert_ok(
+        "none 可作为末尾无任务相关操作片段保存",
+        annotation([
+            subtask(0, 10, "primary_with_support", [base_pull]),
+            subtask(11, 20, "single_hand", [none_action]),
+        ]),
+    )
+    assert_fail(
+        "none 不允许同时包含辅助 action",
+        annotation([subtask(0, 10, "parallel_different_skills", [none_action, base_pick])]),
     )
 
     place_action = action("place", place_values())

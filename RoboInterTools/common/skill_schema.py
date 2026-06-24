@@ -514,15 +514,19 @@ def validate_subtask(subtask, skill_templates, coordination_modes, prefix="subta
         if error:
             return error
 
+    is_none_subtask = actions[0].get("skill") == "none"
+    if is_none_subtask and len(actions) != 1:
+        return f"{prefix} none skill 只允许单 action"
+
     primary_subject = actions[0].get("subject")
     allowed_primary_subjects = coordination_modes[coordination_mode].get("allowed_primary_subjects")
-    if allowed_primary_subjects and primary_subject not in allowed_primary_subjects:
+    if not is_none_subtask and allowed_primary_subjects and primary_subject not in allowed_primary_subjects:
         return (
             f"{prefix} coordination_mode={coordination_mode} "
             f"不允许 primary subject={primary_subject}"
         )
 
-    if coordination_mode == "both_same_skill_same_object":
+    if not is_none_subtask and coordination_mode == "both_same_skill_same_object":
         error = validate_both_same_skill_same_object(actions, prefix)
         if error:
             return error

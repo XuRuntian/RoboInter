@@ -296,6 +296,15 @@ skills:
     enum_constraints: {}
     end_frame_definition: "擦洗结束的第一帧"
 
+  - id: none
+    display_name: 无任务相关操作
+    template: "[subject] performs no task-relevant manipulation"
+    ui_template: "[subject] 无任务相关操作"
+    required_slots:
+      - subject
+    enum_constraints: {}
+    end_frame_definition: "无任务相关操作结束，或视频结束的第一帧"
+
   - id: manipulate
     display_name: 其他操作
     template: "[subject] manipulate [interaction_target] at [position_anchor], causing [changed_object] to [state_change]"
