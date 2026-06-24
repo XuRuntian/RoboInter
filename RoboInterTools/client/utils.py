@@ -35,7 +35,9 @@ def get_available_username(ip, port, username):
 get_avaiable_username = get_available_username
 
 
-def request_video_and_anno(ip, port, mode, username, button_mode, last_video_path, re_anno=0):
+def request_video_and_anno(
+    ip, port, mode, username, button_mode, last_video_path, re_anno=0, repair_video_path=""
+):
     """Fetch next video and annotation from server.
 
     Args:
@@ -65,6 +67,8 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
         "mode": button_mode,
         "last_video_path": last_video_path,
     }
+    if repair_video_path:
+        config["repair_video_path"] = repair_video_path
     if mode == 'sam':
         config["re_anno"] = re_anno
 
@@ -164,6 +168,17 @@ def request_video_and_anno(ip, port, mode, username, button_mode, last_video_pat
                three_anno_num, all_three_anno_num
     else:
         return video_result, anno, save_path, primary_video_path, history_number, video_path, episode_info
+
+
+def request_annotation_stats(ip, port, mode):
+    """Fetch annotation pool statistics from server."""
+    root_url = base_url.format(ip=ip, port=port)
+    url = f"{root_url}/stats_{mode}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    print("Error:", response, response.text)
+    return None
 
 
 def save_anno(ip, port, save_path, anno, metadata=None):

@@ -11,7 +11,13 @@ from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor, QMouseEvent
 from PyQt5.QtCore import Qt, QRect, QPoint, pyqtSignal, QThread
 
 import yaml, time
-from utils import request_video_and_anno, save_anno, drawback_video, get_avaiable_username
+from utils import (
+    request_annotation_stats,
+    request_video_and_anno,
+    save_anno,
+    drawback_video,
+    get_avaiable_username,
+)
 import numpy as np
 
 COMMON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common")
@@ -894,7 +900,12 @@ class VideoPlayer(QWidget):
         # 检测状态变化
         self.is_pre_button.toggled.connect(self.set_button_text)
         video_load_button_layout.addWidget(self.is_pre_button)
+        self.is_pre_button.hide()
         
+        self.previous_button = QPushButton("返回上一条", self)
+        self.previous_button.clicked.connect(self.previous_video_and_load)
+        self.previous_button.setDisabled(True)
+        video_load_button_layout.addWidget(self.previous_button)
         
         self.next_button = QPushButton("保存并加载", self)
         self.next_button.clicked.connect(self.next_video_and_load)
@@ -1074,11 +1085,20 @@ class VideoPlayer(QWidget):
             preview_lang_title_layout.addWidget(preview_clipline)
             preview_clip_layout.addLayout(preview_lang_title_layout)
             # Video clip Language annotation show area
-            self.preview_clip_lang_input = QTextEdit(self)
-            self.preview_clip_lang_input.setReadOnly(True)
-            self.preview_clip_lang_input.setFixedSize(610, 160)
-            self.preview_clip_lang_input.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
-            preview_clip_layout.addWidget(self.preview_clip_lang_input)
+            self.clip_list_widget = QListWidget(self)
+            self.clip_list_widget.setFixedSize(610, 160)
+            self.clip_list_widget.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+            self.clip_list_widget.itemClicked.connect(self.on_clip_list_item_clicked)
+            self.clip_list_widget.itemDoubleClicked.connect(self.on_clip_list_item_double_clicked)
+            preview_clip_layout.addWidget(self.clip_list_widget)
+            clip_action_layout = QHBoxLayout()
+            self.edit_clip_button = QPushButton("修改选中片段", self)
+            self.edit_clip_button.clicked.connect(self.edit_selected_clip_annotation)
+            clip_action_layout.addWidget(self.edit_clip_button)
+            self.delete_clip_button = QPushButton("删除选中片段", self)
+            self.delete_clip_button.clicked.connect(self.delete_selected_clip_annotation)
+            clip_action_layout.addWidget(self.delete_clip_button)
+            preview_clip_layout.addLayout(clip_action_layout)
             lang_layout.addLayout(preview_clip_layout)
             self.toolbar_layout.addLayout(lang_layout)
               
@@ -1385,7 +1405,6 @@ class VideoPlayer(QWidget):
     
     def resizeEvent(self, event):
         self.seek_video()
-        self.clear_keyframes()
         self.update_keyframe_bar()
         
         self.setAutoFillBackground(False)
@@ -1439,13 +1458,13 @@ class VideoPlayer(QWidget):
                 self.clear_video()
                 self.load_video_async()
             
-            elif self.is_finished_button.isChecked() and self.mode != '语言标注': 
+            elif self.mode != '语言标注' and self.is_finished_button.isChecked():
                 res = self.save_sam_anno()
                 if res == -1:
                     return
                 self.load_video_async()
             
-            elif self.is_hard_sample_button.isChecked() and self.mode != '语言标注':
+            elif self.mode != '语言标注' and self.is_hard_sample_button.isChecked():
                 res = self.save_sam_anno()
                 if res == -1:
                     return
@@ -1455,6 +1474,21 @@ class VideoPlayer(QWidget):
                 self.smart_message("请先完成当前视频的标注")
 
         return
+
+    def previous_video_and_load(self):
+        if not self.video_path:
+            self.smart_message("当前没有已加载视频，无法返回上一条")
+            return
+        if self.has_anno():
+            if not self.ask_yes_no(
+                "提示",
+                "当前视频有未保存标注。返回上一条会放弃当前未保存修改，是否继续？",
+                default_yes=False,
+            ):
+                return
+        self.is_pre_button.setChecked(True)
+        self.clear_video()
+        self.load_video_async()
 
     def has_anno(self):
         if self.mode == '语言标注':
@@ -1729,6 +1763,7 @@ class VideoPlayer(QWidget):
         self.lang_anno = dict()
         self.scene_annotation = None
         self.update_scene_display()
+        self.update_clip_annotation_list()
         self.sam_next_button.setDisabled(False)
         self.sam_pre_button.setDisabled(True)
         self.sam_object_id[self.progress_slider.value()] = 0
@@ -1744,6 +1779,7 @@ class VideoPlayer(QWidget):
         if self.last_frame is not None:
             self.draw_image()
         self.update_keyframe_bar()
+        self.update_clip_annotation_list()
            
     def clear_video(self):
         self.last_frame = None
@@ -1775,6 +1811,7 @@ class VideoPlayer(QWidget):
         self.video_lang_input.clear()
         self.update_scene_display()
         self.clip_lang_input.clear()
+        self.update_clip_annotation_list()
         self.video_position_label.setText(f"帧: -/-")
     
     def remove_last_sam_annotation(self):
@@ -1843,9 +1880,101 @@ class VideoPlayer(QWidget):
         if self.last_frame is not None:
             self.draw_image()
     
+    def no_video_message(self, stats):
+        if not stats or not isinstance(stats, dict):
+            return "暂无需要标注的视频，请耐心等待", 0
+        per_user = stats.get("per_user", {}) or {}
+        user_stats = per_user.get(self.username, {}) or {}
+        remaining = int(user_stats.get("remaining", 0) or 0)
+        claimed = int(user_stats.get("claimed", user_stats.get("in_progress", 0)) or 0)
+        completed = int(user_stats.get("completed", 0) or 0)
+        user_total = int(user_stats.get("total", remaining + claimed) or 0)
+        total_remaining = int(stats.get("remaining", 0) or 0)
+        total_claimed = int(stats.get("claimed", stats.get("in_progress", 0)) or 0)
+        total_completed = int(stats.get("completed", 0) or 0)
+        total = int(stats.get("total", total_remaining + total_claimed) or 0)
+        message = (
+            "当前用户待标注池为空。\n"
+            f"当前用户 {self.username}: 待标注 {remaining}, "
+            f"已领取/可修复 {claimed}, 已保存历史 {completed}, 任务池总数 {user_total}。\n"
+            f"全局: 待标注 {total_remaining}, 已领取/可修复 {total_claimed}, "
+            f"已保存历史 {total_completed}, 任务池总数 {total}。"
+        )
+        return message, claimed
+
+    def repair_items_from_stats(self, stats):
+        if not stats or not isinstance(stats, dict):
+            return []
+        user_stats = (stats.get("per_user", {}) or {}).get(self.username, {}) or {}
+        items = user_stats.get("claimed_items", []) or []
+        return [item for item in items if isinstance(item, dict) and item.get("task_id")]
+
+    def choose_repair_video(self, stats, message):
+        items = self.repair_items_from_stats(stats)
+        if not items:
+            return ""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择要修复的标注")
+        dialog.setFixedSize(760, 430)
+        layout = QVBoxLayout(dialog)
+
+        info = QLabel(message, dialog)
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        repair_list = QListWidget(dialog)
+        repair_list.setFixedSize(730, 300)
+        for idx, item in enumerate(items):
+            status = "已保存" if item.get("saved") else "已领取未保存"
+            display_name = item.get("display_name") or item.get("task_id")
+            task_id = item.get("task_id")
+            list_item = QListWidgetItem(f"{idx + 1}. [{status}] {display_name}\n{task_id}")
+            list_item.setData(Qt.UserRole, task_id)
+            repair_list.addItem(list_item)
+        repair_list.setCurrentRow(0)
+        layout.addWidget(repair_list)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
+        button_box.button(QDialogButtonBox.Ok).setText("打开修复")
+        button_box.button(QDialogButtonBox.Cancel).setText("取消")
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return ""
+        selected_item = repair_list.currentItem()
+        return selected_item.data(Qt.UserRole) if selected_item is not None else ""
+
     def load_video_callback(self, res):
         if res == 0:
-            self.smart_message("暂无需要标注的视频，请耐心等待")
+            stats = request_annotation_stats(
+                self.ip_address,
+                self.port,
+                "lang" if self.mode == '语言标注' else "sam",
+            )
+            message, claimed_count = self.no_video_message(stats)
+            if self.mode == '语言标注' and claimed_count > 0:
+                repair_video_path = self.choose_repair_video(stats, message)
+                if repair_video_path:
+                    repair_res = request_video_and_anno(
+                        self.ip_address,
+                        self.port,
+                        'lang',
+                        self.username,
+                        'repair',
+                        self.video_path or '',
+                        repair_video_path=repair_video_path,
+                    )
+                    if repair_res and repair_res != 0:
+                        self.load_video_callback(repair_res)
+                        return
+                    self.smart_message("没有找到可修复的已领取/已保存视频")
+                else:
+                    self.smart_message(message)
+            else:
+                self.smart_message(message)
             sys.exit()
         
         if self.mode != '语言标注':
@@ -1877,7 +2006,11 @@ class VideoPlayer(QWidget):
         self.save_path = save_path
         self.video_path = video_path
         self.hist_num = hist_num
-        self.hist_num_label.setText(f"已标注数量: {self.hist_num}")
+        self.previous_button.setDisabled(False)
+        if self.mode == '语言标注':
+            self.hist_num_label.setText(f"已保存历史: {self.hist_num}")
+        else:
+            self.hist_num_label.setText(f"已标注数量: {self.hist_num}")
         if self.mode != '语言标注':
             self.two_anno_num = two_anno_num
             self.one_anno_num = one_anno_num
@@ -1924,6 +2057,7 @@ class VideoPlayer(QWidget):
         self.sam_object_id = [0] * self.frame_count
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.keyframes = {}
         self.tracking_points_sam = dict()
         self.ori_video = self.video_views if self.video_views else np.array(video)
         self.setup_video_view_labels()
@@ -1994,7 +2128,7 @@ class VideoPlayer(QWidget):
             video_text = self.lang_anno.get((0, 0), "")
             self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
             self.update_scene_display()
-            self.preview_clip_lang_input.setText(self.get_clip_lang_anno())
+            self.update_clip_annotation_list()
         
         return 1
             
@@ -2111,6 +2245,7 @@ class VideoPlayer(QWidget):
         anno_loc = anno_loc[1]
         if anno_loc is not None:
             self.clip_lang_input.setText(f"开始帧: {anno_loc[0]+1} | 结束帧: {anno_loc[1]+1}\n原子动作: {prim}\n动作描述: {clip_text}")
+            self.update_clip_annotation_list(anno_loc)
         else:
             self.clip_lang_input.clear()
             
@@ -2670,12 +2805,97 @@ class VideoPlayer(QWidget):
         info, lang = self.get_clip_description()
         if info[0] is not None:
             idx, loc = info
-            self.lang_anno.pop(loc)
-            self.keyframes.pop(loc[0])
-            self.keyframes.pop(loc[1])
-            self.update_keyframe_bar()
-            self.clip_lang_input.clear()
-            self.selected_keyframe = None
+            self.delete_clip_annotation(loc)
+
+    def delete_clip_annotation(self, clip_range):
+        if clip_range not in self.lang_anno:
+            return
+        self.lang_anno.pop(clip_range, None)
+        self.keyframes.pop(clip_range[0], None)
+        self.keyframes.pop(clip_range[1], None)
+        self.update_keyframe_bar()
+        self.clip_lang_input.clear()
+        self.selected_keyframe = None
+        self.update_clip_annotation_list()
+
+    def selected_clip_range(self):
+        if not hasattr(self, "clip_list_widget"):
+            return None
+        item = self.clip_list_widget.currentItem()
+        if item is None:
+            return None
+        clip_range = item.data(Qt.UserRole)
+        if isinstance(clip_range, tuple) and len(clip_range) == 2:
+            return clip_range
+        return None
+
+    def on_clip_list_item_clicked(self, item):
+        clip_range = item.data(Qt.UserRole)
+        if isinstance(clip_range, tuple) and len(clip_range) == 2:
+            self.jump_to_clip_annotation(clip_range)
+
+    def on_clip_list_item_double_clicked(self, item):
+        clip_range = item.data(Qt.UserRole)
+        if isinstance(clip_range, tuple) and len(clip_range) == 2:
+            self.edit_clip_annotation(clip_range)
+
+    def jump_to_clip_annotation(self, clip_range):
+        if clip_range not in self.lang_anno:
+            return
+        self.progress_slider.setValue(clip_range[0])
+        self.show_clip_annotation(clip_range)
+
+    def show_clip_annotation(self, clip_range):
+        subtask = self.lang_anno.get(clip_range)
+        text, prim, _ = get_subtask_display(subtask)
+        self.clip_lang_input.setText(
+            f"开始帧: {clip_range[0]+1} | 结束帧: {clip_range[1]+1}\n"
+            f"原子动作: {prim}\n动作描述: {text}"
+        )
+
+    def edit_selected_clip_annotation(self):
+        clip_range = self.selected_clip_range()
+        if clip_range is None:
+            info, _ = self.get_clip_description()
+            clip_range = info[1]
+        if clip_range is None:
+            self.smart_message("请先在列表中选择要修改的视频段")
+            return
+        self.edit_clip_annotation(clip_range)
+
+    def delete_selected_clip_annotation(self):
+        clip_range = self.selected_clip_range()
+        if clip_range is None:
+            info, _ = self.get_clip_description()
+            clip_range = info[1]
+        if clip_range is None:
+            self.smart_message("请先在列表中选择要删除的视频段")
+            return
+        if QMessageBox.question(
+            self,
+            "确认删除",
+            f"确认删除帧{clip_range[0] + 1}-{clip_range[1] + 1}的视频段标注？",
+            QMessageBox.Yes | QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self.delete_clip_annotation(clip_range)
+
+    def edit_clip_annotation(self, clip_range, delete_on_cancel=False):
+        cached_clip = self.lang_anno.get(clip_range)
+        is_existing_clip = isinstance(cached_clip, dict)
+        cached_lang, prim, origin_text = get_subtask_display(cached_clip)
+        if not is_existing_clip:
+            cached_clip = ''
+            cached_lang, prim, origin_text = '', '', ''
+        dialog = TextInputDialog(cached_clip, self, False, self.video_2_lang, origin_text=origin_text)
+        if dialog.exec_() == QDialog.Accepted:
+            structured_clip = dialog.get_structured_result()
+            self.lang_anno[clip_range] = structured_clip
+            self.show_clip_annotation(clip_range)
+            self.update_clip_annotation_list(clip_range)
+            return
+        if delete_on_cancel and not is_existing_clip:
+            self.delete_clip_annotation(clip_range)
         
     def add_frame_discribtion(self):
         frame_number = self.progress_slider.value()
@@ -2695,21 +2915,7 @@ class VideoPlayer(QWidget):
         anno_id, anno_loc = anno_loc[0]
         
         cached_clip = self.lang_anno[anno_loc]
-        cached_lang, prim, origin_text = get_subtask_display(cached_clip)
-        if not isinstance(cached_clip, dict):
-            cached_clip = ''
-            cached_lang, prim, origin_text = '', '', ''
-        # Create a dialog to get the structured subtask from the user
-        dialog = TextInputDialog(cached_clip, self, False, self.video_2_lang, origin_text=origin_text)
-        if dialog.exec_() == QDialog.Accepted:
-            structured_clip = dialog.get_structured_result()
-            cached_lang, prim, _ = get_subtask_display(structured_clip)
-            self.lang_anno[anno_loc] = structured_clip
-            self.clip_lang_input.setText(f"开始帧: {anno_loc[0]+1} | 结束帧: {anno_loc[1]+1}\n原子动作: {prim}\n动作描述: {cached_lang}")
-            self.preview_clip_lang_input.setText(self.get_clip_lang_anno())
-        else:
-            self.delete_keyframe()
-            return
+        self.edit_clip_annotation(anno_loc, delete_on_cancel=not isinstance(cached_clip, dict))
     
     def add_video_description(self):
         cached_lang = self.lang_anno.get((0, 0), "")
@@ -2743,13 +2949,36 @@ class VideoPlayer(QWidget):
 
     def get_clip_description(self):
         # Get the subtask text for the clip
-        key_pairs = [key for key in self.lang_anno if key != (0, 0)]
+        key_pairs = sorted(key for key in self.lang_anno if key != (0, 0))
         frame_number = self.progress_slider.value()
         anno_loc = [(idx, i) for idx, i in enumerate(key_pairs) if i[0] <= frame_number <= i[1] and i[0] != i[1]]
         if len(anno_loc) > 0:
             anno_loc = anno_loc[0]
             return anno_loc, get_subtask_display(self.lang_anno[anno_loc[1]])
         return (None, None), (None, None, None)
+
+    def update_clip_annotation_list(self, selected_clip_range=None):
+        if not hasattr(self, "clip_list_widget"):
+            return
+        old_block_state = self.clip_list_widget.blockSignals(True)
+        self.clip_list_widget.clear()
+        selected_row = -1
+        for idx, ((start_frame, end_frame), subtask) in enumerate(
+            sorted((key, value) for key, value in self.lang_anno.items() if key != (0, 0))
+        ):
+            text, prim, _ = get_subtask_display(subtask)
+            display_text = text if text else "未填写动作描述"
+            prefix = f"{idx + 1}: 帧{start_frame + 1}-{end_frame + 1}"
+            if prim:
+                prefix += f" | {prim}"
+            item = QListWidgetItem(f"{prefix} | {display_text}")
+            item.setData(Qt.UserRole, (start_frame, end_frame))
+            self.clip_list_widget.addItem(item)
+            if selected_clip_range == (start_frame, end_frame):
+                selected_row = idx
+        if selected_row >= 0:
+            self.clip_list_widget.setCurrentRow(selected_row)
+        self.clip_list_widget.blockSignals(old_block_state)
 
     def get_clip_lang_anno(self):
         out_text = ''

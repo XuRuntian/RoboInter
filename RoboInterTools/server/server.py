@@ -151,6 +151,31 @@ def get_available(a, b):
     return [a_dict[i] for i in b if i in a_dict]
 
 
+def get_latest_history_item(history, candidates):
+    """Return the newest history item that is still present in candidates."""
+    for item in reversed(history):
+        item = item.strip()
+        if item in candidates:
+            return item
+    return None
+
+
+def choose_repair_task(user_pool, user_has, history, requested_task_id=""):
+    if requested_task_id in user_has:
+        return requested_task_id
+    if requested_task_id in user_pool:
+        user_has[requested_task_id] = user_pool[requested_task_id].copy()
+        del user_pool[requested_task_id]
+        return requested_task_id
+
+    task_id = get_latest_history_item(history, user_has)
+    if task_id is not None:
+        return task_id
+    if user_has:
+        return next(reversed(user_has))
+    return None
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint."""
@@ -200,6 +225,7 @@ def get_video_lang():
     user_name = config.get('username', '').strip()
     mode = config.get('mode', 'next')
     last_video_path = config.get('last_video_path', '')
+    repair_video_path = config.get('repair_video_path', '')
 
     # Get user history
     history = get_user_history(user_name, 'lang')
@@ -214,26 +240,36 @@ def get_video_lang():
                 has_annotation = json.load(f2)
 
                 # User-specific annotation pool
-                user_pool = no_annotation.get(user_name, {})
-                user_has = has_annotation.get(user_name, {})
+                user_pool = no_annotation.setdefault(user_name, {})
+                user_has = has_annotation.setdefault(user_name, {})
+                task_id = None
+                is_finished = False
 
-                if len(user_pool) == 0:
+                if mode == 'repair':
+                    task_id = choose_repair_task(user_pool, user_has, history, repair_video_path)
+                    if task_id is None:
+                        is_finished = True
+                elif mode == 'pre':
+                    if last_video_path and last_video_path in user_has:
+                        user_pool[last_video_path] = user_has[last_video_path].copy()
+                        del user_has[last_video_path]
+
+                    task_id = choose_repair_task(user_pool, user_has, history)
+
+                    if task_id is None and last_video_path in user_pool:
+                        task_id = last_video_path
+                        user_has[task_id] = user_pool[task_id].copy()
+                        del user_pool[task_id]
+
+                    if task_id is None:
+                        is_finished = True
+                elif len(user_pool) == 0:
                     is_finished = True
-                    task_id = None
                 else:
-                    is_finished = False
-
-                    if mode == 'pre' and last_video_path:
-                        # Return to previous video
-                        task_id = history[-1].strip() if history else None
-                        if last_video_path in user_has:
-                            no_annotation.setdefault(user_name, {})[last_video_path] = user_has[last_video_path].copy()
-                            del has_annotation[user_name][last_video_path]
-                    else:
-                        # Get next video
-                        task_id = list(user_pool.keys())[0]
-                        has_annotation.setdefault(user_name, {})[task_id] = user_pool[task_id].copy()
-                        del no_annotation[user_name][task_id]
+                    # Get next video
+                    task_id = next(iter(user_pool))
+                    user_has[task_id] = user_pool[task_id].copy()
+                    del user_pool[task_id]
 
                 f2.seek(0)
                 f2.truncate()
@@ -274,7 +310,8 @@ def get_video_lang():
                         f.write(video_file.read())
 
             # Load annotation if exists
-            anno_path = video_info.get('anno_path')
+            save_path = video_info.get('save_path', '')
+            anno_path = video_info.get('anno_path') or save_path
             if anno_path and os.path.exists(anno_path):
                 npz_io = io.BytesIO()
                 with np.load(anno_path, allow_pickle=True) as anno_file:
@@ -289,7 +326,6 @@ def get_video_lang():
                 zf.writestr("anno.npz", npz_io.getvalue())
 
             # Include paths
-            save_path = video_info.get('save_path', '')
             zf.writestr("save_path", save_path)
             zf.writestr("video_path", task_id)
             zf.writestr("primary_video_path", primary_video_path(task_id, video_info))
@@ -580,39 +616,67 @@ def drawback_video_sam():
     return "success"
 
 
+def build_annotation_stats(mode):
+    no_key = f"no_annotation_{mode}"
+    has_key = f"has_annotation_{mode}"
+    with open(PATHS[no_key], 'r') as f:
+        no_annotation = json.load(f)
+    with open(PATHS[has_key], 'r') as f:
+        has_annotation = json.load(f)
+
+    users = set(no_annotation) | set(has_annotation)
+    per_user = {}
+    total_remaining = 0
+    total_claimed = 0
+    total_completed = 0
+
+    for user in sorted(users):
+        user_no = no_annotation.get(user, {}) or {}
+        user_has = has_annotation.get(user, {}) or {}
+        history = get_user_history(user, mode)
+        history_set = {item.strip() for item in history}
+        remaining = len(user_no)
+        claimed = len(user_has)
+        claimed_items = []
+        for task_id, video_info in user_has.items():
+            video_info = video_info if isinstance(video_info, dict) else {}
+            primary_path = primary_video_path(task_id, video_info)
+            save_path = video_info.get("save_path", "")
+            claimed_items.append({
+                "task_id": task_id,
+                "display_name": os.path.basename(str(primary_path or task_id)),
+                "primary_video_path": primary_path,
+                "save_path": save_path,
+                "saved": task_id in history_set or bool(save_path and os.path.exists(save_path)),
+            })
+        completed = len(history)
+        per_user[user] = {
+            "remaining": remaining,
+            "claimed": claimed,
+            "in_progress": claimed,
+            "completed": completed,
+            "total": remaining + claimed,
+            "claimed_items": claimed_items,
+        }
+        total_remaining += remaining
+        total_claimed += claimed
+        total_completed += completed
+
+    return {
+        "remaining": total_remaining,
+        "claimed": total_claimed,
+        "in_progress": total_claimed,
+        "completed": total_completed,
+        "total": total_remaining + total_claimed,
+        "per_user": per_user,
+    }
+
+
 @app.route("/stats_lang", methods=["GET"])
 def get_stats_lang():
     """Get annotation statistics (lang mode)."""
     try:
-        with open(PATHS["no_annotation_lang"], 'r') as f:
-            no_annotation = json.load(f)
-        with open(PATHS["has_annotation_lang"], 'r') as f:
-            has_annotation = json.load(f)
-
-        per_user = {}
-        total_remaining = 0
-        total_annotated = 0
-
-        for user, videos in no_annotation.items():
-            if isinstance(videos, dict):
-                count = len(videos)
-                total_remaining += count
-                per_user.setdefault(user, {"remaining": 0, "in_progress": 0})
-                per_user[user]["remaining"] = count
-
-        for user, videos in has_annotation.items():
-            if isinstance(videos, dict):
-                count = len(videos)
-                total_annotated += count
-                per_user.setdefault(user, {"remaining": 0, "in_progress": 0})
-                per_user[user]["in_progress"] = count
-
-        return {
-            "remaining": total_remaining,
-            "in_progress": total_annotated,
-            "total": total_remaining + total_annotated,
-            "per_user": per_user
-        }
+        return build_annotation_stats("lang")
     except Exception as e:
         return {"error": str(e)}, 500
 
@@ -621,35 +685,7 @@ def get_stats_lang():
 def get_stats_sam():
     """Get annotation statistics (sam mode)."""
     try:
-        with open(PATHS["no_annotation_sam"], 'r') as f:
-            no_annotation = json.load(f)
-        with open(PATHS["has_annotation_sam"], 'r') as f:
-            has_annotation = json.load(f)
-
-        per_user = {}
-        total_remaining = 0
-        total_annotated = 0
-
-        for user, videos in no_annotation.items():
-            if isinstance(videos, dict):
-                count = len(videos)
-                total_remaining += count
-                per_user.setdefault(user, {"remaining": 0, "in_progress": 0})
-                per_user[user]["remaining"] = count
-
-        for user, videos in has_annotation.items():
-            if isinstance(videos, dict):
-                count = len(videos)
-                total_annotated += count
-                per_user.setdefault(user, {"remaining": 0, "in_progress": 0})
-                per_user[user]["in_progress"] = count
-
-        return {
-            "remaining": total_remaining,
-            "in_progress": total_annotated,
-            "total": total_remaining + total_annotated,
-            "per_user": per_user
-        }
+        return build_annotation_stats("sam")
     except Exception as e:
         return {"error": str(e)}, 500
 
