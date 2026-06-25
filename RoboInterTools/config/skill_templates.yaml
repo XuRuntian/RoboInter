@@ -32,9 +32,9 @@ slot_display_names:
 
 enum_constraints:
   subject:
-    - left_gripper
-    - right_gripper
-    - both_grippers
+    - left_effector
+    - right_effector
+    - both_effectors
     - base
     - robot_body
     - left_arm
@@ -44,9 +44,9 @@ enum_constraints:
 
 enum_display_names:
   subject:
-    left_gripper: 左夹爪
-    right_gripper: 右夹爪
-    both_grippers: 双夹爪
+    left_effector: 左末端
+    right_effector: 右末端
+    both_effectors: 双末端
     base: 底盘
     robot_body: 机器人本体
     left_arm: 左机械臂

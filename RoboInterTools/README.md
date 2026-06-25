@@ -314,6 +314,38 @@ human_anno_sam/
 
 ## Data Formats
 
+### Language Annotation (`anno_file` in `.npz`)
+
+```python
+{
+    "schema_version": "skill_text_v1",
+    "template_set_version": "skill_templates_v1",
+    "episode": dict,
+    "robot_setup": {
+        "left_effector_type": "gripper | dexterous_hand | suction_cup | soft_gripper | tool | none | unknown",
+        "right_effector_type": "gripper | dexterous_hand | suction_cup | soft_gripper | tool | none | unknown",
+    },
+    "video_text": str,
+    "scene": dict,
+    "subtasks": [
+        {
+            "start_frame": int,
+            "end_frame": int,
+            "coordination_mode": str,
+            "actions": [
+                {
+                    "subject": "left_effector | right_effector | both_effectors | left_arm | right_arm | both_arms | base | robot_body | unknown",
+                    "skill": str,
+                    "slots": dict,
+                    "text": str,
+                }
+            ],
+            "text": str,
+        }
+    ],
+}
+```
+
 ### Annotation Config (`.npz`)
 
 ```python

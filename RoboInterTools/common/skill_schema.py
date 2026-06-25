@@ -1,5 +1,6 @@
 import os
 import re
+import copy
 
 import yaml
 
@@ -15,6 +16,7 @@ DEFAULT_SCENE_TEMPLATE_PATH = os.path.join(ROOT_DIR, "config", "scene_templates.
 
 ACTION_ALLOWED_KEYS = {"subject", "skill", "slots", "text"}
 SUBTASK_ALLOWED_KEYS = {"start_frame", "end_frame", "coordination_mode", "actions", "text"}
+ROBOT_SETUP_ALLOWED_KEYS = {"left_effector_type", "right_effector_type"}
 SCENE_OBJECT_ALLOWED_KEYS = {"name", "role", "support_or_region", "states", "affordance"}
 SCENE_LOCATION_ALLOWED_KEYS = {"space", "anchor"}
 EPISODE_ALLOWED_KEYS = {
@@ -37,9 +39,38 @@ ANNOTATION_ALLOWED_KEYS = {
     "schema_version",
     "template_set_version",
     "episode",
+    "robot_setup",
     "video_text",
     "scene",
     "subtasks",
+}
+
+EFFECTOR_TYPE_ALLOWED_VALUES = [
+    "gripper",
+    "dexterous_hand",
+    "suction_cup",
+    "soft_gripper",
+    "tool",
+    "none",
+    "unknown",
+]
+EFFECTOR_TYPE_DISPLAY_NAMES = {
+    "gripper": "夹爪",
+    "dexterous_hand": "灵巧手",
+    "suction_cup": "吸盘",
+    "soft_gripper": "软体夹爪",
+    "tool": "工具",
+    "none": "无末端",
+    "unknown": "无法判断",
+}
+DEFAULT_ROBOT_SETUP = {
+    "left_effector_type": "unknown",
+    "right_effector_type": "unknown",
+}
+LEGACY_SUBJECT_MAP = {
+    "left_gripper": "left_effector",
+    "right_gripper": "right_effector",
+    "both_grippers": "both_effectors",
 }
 
 
@@ -387,6 +418,93 @@ def get_skill(skill_id, skill_templates):
     return skill_templates[skill_id]
 
 
+def normalize_subject(subject):
+    return LEGACY_SUBJECT_MAP.get(str(subject).strip(), str(subject).strip())
+
+
+def default_robot_setup():
+    return dict(DEFAULT_ROBOT_SETUP)
+
+
+def infer_robot_setup_from_actions(actions, existing_setup=None):
+    robot_setup = default_robot_setup()
+    if isinstance(existing_setup, dict):
+        for key in ROBOT_SETUP_ALLOWED_KEYS:
+            value = str(existing_setup.get(key, "")).strip()
+            if value:
+                robot_setup[key] = value
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        subject = str(action.get("subject", "")).strip()
+        if subject == "left_gripper":
+            robot_setup["left_effector_type"] = "gripper"
+        elif subject == "right_gripper":
+            robot_setup["right_effector_type"] = "gripper"
+        elif subject == "both_grippers":
+            robot_setup["left_effector_type"] = "gripper"
+            robot_setup["right_effector_type"] = "gripper"
+
+    return robot_setup
+
+
+def iter_annotation_actions(annotation):
+    if not isinstance(annotation, dict):
+        return []
+    actions = []
+    for subtask in annotation.get("subtasks") or []:
+        if isinstance(subtask, dict):
+            actions.extend([
+                action for action in (subtask.get("actions") or [])
+                if isinstance(action, dict)
+            ])
+    return actions
+
+
+def normalize_legacy_action(action, skill_templates):
+    if not isinstance(action, dict):
+        return action
+    normalized = copy.deepcopy(action)
+    normalized["subject"] = normalize_subject(normalized.get("subject", ""))
+    if normalized.get("skill") in skill_templates and isinstance(normalized.get("slots"), dict):
+        normalized["text"] = render_action_text(normalized, skill_templates[normalized["skill"]])
+    return normalized
+
+
+def normalize_legacy_annotation(annotation, skill_templates=None):
+    if not isinstance(annotation, dict):
+        return annotation
+    if skill_templates is None:
+        _, skill_templates = load_skill_templates()
+
+    normalized = copy.deepcopy(annotation)
+    scene = normalized.get("scene")
+    if isinstance(scene, dict):
+        normalized["scene"] = {
+            key: value for key, value in scene.items()
+            if key not in ("scene_level1", "scene_level2")
+        }
+
+    actions_before = iter_annotation_actions(normalized)
+    normalized["robot_setup"] = infer_robot_setup_from_actions(
+        actions_before,
+        normalized.get("robot_setup"),
+    )
+
+    for subtask in normalized.get("subtasks") or []:
+        if not isinstance(subtask, dict):
+            continue
+        actions = [
+            normalize_legacy_action(action, skill_templates)
+            for action in (subtask.get("actions") or [])
+        ]
+        subtask["actions"] = actions
+        subtask["text"] = render_subtask_text(actions)
+
+    return normalized
+
+
 def render_template(template, values):
     rendered = template
     for slot in extract_template_slots(template):
@@ -396,7 +514,7 @@ def render_template(template, values):
 
 def render_action_text(action, skill_config):
     values = dict(action.get("slots") or {})
-    values["subject"] = action.get("subject", "")
+    values["subject"] = normalize_subject(action.get("subject", ""))
     return render_template(skill_config["template"], values)
 
 
@@ -416,7 +534,7 @@ def build_action_from_slot_values(skill_id, slot_values, skill_templates, allow_
     if missing_slots and not allow_empty:
         raise ValueError(f"缺少必填 slot: {missing_slots[0]}")
 
-    subject = str(slot_values.get("subject", "")).strip()
+    subject = normalize_subject(slot_values.get("subject", ""))
     slots = {}
     for slot in skill_config["required_slots"]:
         if slot == "subject":
@@ -541,10 +659,10 @@ def validate_subtask(subtask, skill_templates, coordination_modes, prefix="subta
 def validate_both_same_skill_same_object(actions, prefix):
     subjects = [action.get("subject") for action in actions]
     if len(actions) == 1:
-        if subjects[0] not in ("both_grippers", "both_arms"):
+        if subjects[0] not in ("both_effectors", "both_arms"):
             return (
                 f"{prefix} both_same_skill_same_object 单 action 时 "
-                "subject 必须是 both_grippers 或 both_arms"
+                "subject 必须是 both_effectors 或 both_arms"
             )
         return None
 
@@ -553,17 +671,35 @@ def validate_both_same_skill_same_object(actions, prefix):
 
     subject_set = set(subjects)
     valid_subject_pairs = [
-        {"left_gripper", "right_gripper"},
+        {"left_effector", "right_effector"},
         {"left_arm", "right_arm"},
     ]
     if subject_set not in valid_subject_pairs:
         return (
             f"{prefix} both_same_skill_same_object 双 action 时 "
-            "subject 必须是 left_gripper+right_gripper 或 left_arm+right_arm"
+            "subject 必须是 left_effector+right_effector 或 left_arm+right_arm"
         )
 
     if actions[0].get("skill") != actions[1].get("skill"):
         return f"{prefix} both_same_skill_same_object 双 action 的 skill 必须相同"
+    return None
+
+
+def validate_robot_setup(robot_setup, prefix="robot_setup"):
+    if not isinstance(robot_setup, dict):
+        return f"{prefix} 必须是 dict"
+
+    unknown_keys = set(robot_setup) - ROBOT_SETUP_ALLOWED_KEYS
+    if unknown_keys:
+        return f"{prefix} 出现未知字段: {sorted(unknown_keys)}"
+    missing_keys = ROBOT_SETUP_ALLOWED_KEYS - set(robot_setup)
+    if missing_keys:
+        return f"{prefix} 缺少字段: {sorted(missing_keys)}"
+
+    for field_name in sorted(ROBOT_SETUP_ALLOWED_KEYS):
+        value = str(robot_setup.get(field_name, "")).strip()
+        if value not in EFFECTOR_TYPE_ALLOWED_VALUES:
+            return f"{prefix}.{field_name} 必须属于 {EFFECTOR_TYPE_ALLOWED_VALUES}"
     return None
 
 
@@ -630,6 +766,9 @@ def validate_annotation(annotation, skill_templates=None, coordination_modes=Non
     episode_error = validate_episode(annotation.get("episode"))
     if episode_error:
         return episode_error
+    robot_setup_error = validate_robot_setup(annotation.get("robot_setup"))
+    if robot_setup_error:
+        return robot_setup_error
     if not str(annotation.get("video_text", "")).strip():
         return "video_text 不能为空"
     scene_error = validate_scene(annotation.get("scene"), scene_template)

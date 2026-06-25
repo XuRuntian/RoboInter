@@ -25,6 +25,9 @@ if COMMON_DIR not in sys.path:
     sys.path.insert(0, COMMON_DIR)
 
 from skill_schema import (
+    DEFAULT_ROBOT_SETUP,
+    EFFECTOR_TYPE_ALLOWED_VALUES,
+    EFFECTOR_TYPE_DISPLAY_NAMES,
     SCHEMA_VERSION,
     TEMPLATE_SET_VERSION,
     build_action_from_slot_values,
@@ -32,9 +35,12 @@ from skill_schema import (
     load_coordination_modes,
     load_scene_templates,
     load_skill_templates,
+    normalize_legacy_annotation,
+    normalize_subject,
     render_scene_text,
     render_subtask_text,
     validate_annotation,
+    validate_robot_setup,
     validate_scene,
     validate_subtask,
 )
@@ -69,6 +75,79 @@ def strip_legacy_scene_fields(scene):
         key: value for key, value in scene.items()
         if key not in ("scene_level1", "scene_level2")
     }
+
+
+def normalize_robot_setup(robot_setup):
+    normalized = dict(DEFAULT_ROBOT_SETUP)
+    if isinstance(robot_setup, dict):
+        for key in normalized:
+            value = str(robot_setup.get(key, "")).strip()
+            if value in EFFECTOR_TYPE_ALLOWED_VALUES:
+                normalized[key] = value
+    return normalized
+
+
+class RobotSetupDialog(QDialog):
+
+    def __init__(self, initial_setup=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("末端执行器类型")
+        self.robot_setup_result = None
+        self.main_layout = QGridLayout(self)
+
+        initial_setup = normalize_robot_setup(initial_setup)
+        self.left_effector_select = self.create_effector_combo(
+            initial_setup.get("left_effector_type", "unknown")
+        )
+        self.right_effector_select = self.create_effector_combo(
+            initial_setup.get("right_effector_type", "unknown")
+        )
+
+        self.main_layout.addWidget(QLabel("左末端类型:", self), 0, 0)
+        self.main_layout.addWidget(self.left_effector_select, 0, 1)
+        self.main_layout.addWidget(QLabel("右末端类型:", self), 1, 0)
+        self.main_layout.addWidget(self.right_effector_select, 1, 1)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box.button(QDialogButtonBox.Ok).setText("确定")
+        self.button_box.button(QDialogButtonBox.Cancel).setText("取消")
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        self.main_layout.addWidget(self.button_box, 2, 0, 1, 2)
+
+    def create_effector_combo(self, current_value):
+        combo = QComboBox(self)
+        combo.setFixedSize(260, 30)
+        for value in EFFECTOR_TYPE_ALLOWED_VALUES:
+            label = EFFECTOR_TYPE_DISPLAY_NAMES.get(value, value)
+            combo.addItem(f"{label} ({value})", value)
+        for idx in range(combo.count()):
+            if combo.itemData(idx) == current_value:
+                combo.setCurrentIndex(idx)
+                break
+        return combo
+
+    def build_robot_setup(self):
+        return {
+            "left_effector_type": self.left_effector_select.itemData(
+                self.left_effector_select.currentIndex()
+            ),
+            "right_effector_type": self.right_effector_select.itemData(
+                self.right_effector_select.currentIndex()
+            ),
+        }
+
+    def accept(self):
+        robot_setup = self.build_robot_setup()
+        error = validate_robot_setup(robot_setup)
+        if error:
+            QMessageBox.warning(self, "提示", error)
+            return
+        self.robot_setup_result = robot_setup
+        super().accept()
+
+    def get_robot_setup_result(self):
+        return self.robot_setup_result
 
 
 class SceneInputDialog(QDialog):
@@ -517,7 +596,7 @@ class TextInputDialog(QDialog):
         if isinstance(action, dict):
             values.update(action.get("slots") or {})
             if action.get("subject"):
-                values["subject"] = action["subject"]
+                values["subject"] = normalize_subject(action["subject"])
         return values
 
     def clear_layout(self, layout):
@@ -1014,6 +1093,18 @@ class VideoPlayer(QWidget):
         self.video_lang_input.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
         lang_layout.addWidget(self.video_lang_input)
 
+        robot_setup_button_layout = QHBoxLayout()
+        self.robot_setup_button = QPushButton("添加/修改末端类型", self)
+        self.robot_setup_button.clicked.connect(self.add_robot_setup_annotation)
+        robot_setup_button_layout.addWidget(self.robot_setup_button)
+        lang_layout.addLayout(robot_setup_button_layout)
+
+        self.robot_setup_input = QTextEdit(self)
+        self.robot_setup_input.setReadOnly(True)
+        self.robot_setup_input.setFixedSize(610, 55)
+        self.robot_setup_input.setStyleSheet("background-color: #E3E3E3; font-weight: bold;")
+        lang_layout.addWidget(self.robot_setup_input)
+
         scene_button_layout = QHBoxLayout()
         self.scene_anno_button = QPushButton("添加/修改场景标注", self)
         self.scene_anno_button.clicked.connect(self.add_scene_annotation)
@@ -1048,6 +1139,8 @@ class VideoPlayer(QWidget):
         if self.mode == '分割标注':
             # 删除语言标注区域
             self.video_lang_input.hide()
+            self.robot_setup_button.hide()
+            self.robot_setup_input.hide()
             self.scene_anno_button.hide()
             self.scene_lang_input.hide()
             self.clip_lang_input.hide()
@@ -1184,6 +1277,7 @@ class VideoPlayer(QWidget):
         self.sam_anno = False
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.robot_setup_annotation = None
         self.max_point_num = dict()
         self.video_2_lang = dict()
         self.loaded_lang_annotation = None
@@ -1662,6 +1756,16 @@ class VideoPlayer(QWidget):
             self.progress.close()
             self.smart_message("请按回车标注整体视频描述")
             return -1
+        if not self.robot_setup_annotation:
+            self.progress.close()
+            self.smart_message("请先完成末端执行器类型标注")
+            return -1
+        robot_setup = normalize_robot_setup(self.robot_setup_annotation)
+        error = validate_robot_setup(robot_setup)
+        if error:
+            self.progress.close()
+            self.smart_message(error)
+            return -1
         if not self.scene_annotation:
             self.progress.close()
             self.smart_message("请先完成场景标注")
@@ -1673,6 +1777,7 @@ class VideoPlayer(QWidget):
             "schema_version": SCHEMA_VERSION,
             "template_set_version": TEMPLATE_SET_VERSION,
             "episode": self.build_episode_info(),
+            "robot_setup": robot_setup,
             "video_text": video_text,
             "scene": scene_annotation,
             "subtasks": [],
@@ -1723,6 +1828,7 @@ class VideoPlayer(QWidget):
         self.progress.close()
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.robot_setup_annotation = None
         self.episode_info = None
         return 0
 
@@ -1762,6 +1868,8 @@ class VideoPlayer(QWidget):
             ]
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.robot_setup_annotation = None
+        self.update_robot_setup_display()
         self.update_scene_display()
         self.update_clip_annotation_list()
         self.sam_next_button.setDisabled(False)
@@ -1808,7 +1916,9 @@ class VideoPlayer(QWidget):
         # self.vis_ori.setChecked(True)
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.robot_setup_annotation = None
         self.video_lang_input.clear()
+        self.update_robot_setup_display()
         self.update_scene_display()
         self.clip_lang_input.clear()
         self.update_clip_annotation_list()
@@ -1990,7 +2100,9 @@ class VideoPlayer(QWidget):
                 video, lang, save_path, primary_video_path, hist_num = res
                 task_id = primary_video_path
             self.loaded_lang_annotation = (
-                lang if isinstance(lang, dict) and lang.get("schema_version") == SCHEMA_VERSION else None
+                normalize_legacy_annotation(lang, SKILL_TEMPLATES)
+                if isinstance(lang, dict) and lang.get("schema_version") == SCHEMA_VERSION
+                else None
             )
             if not episode_info and self.loaded_lang_annotation:
                 episode_info = self.loaded_lang_annotation.get("episode") or {}
@@ -2057,6 +2169,7 @@ class VideoPlayer(QWidget):
         self.sam_object_id = [0] * self.frame_count
         self.lang_anno = dict()
         self.scene_annotation = None
+        self.robot_setup_annotation = None
         self.keyframes = {}
         self.tracking_points_sam = dict()
         self.ori_video = self.video_views if self.video_views else np.array(video)
@@ -2108,6 +2221,9 @@ class VideoPlayer(QWidget):
                 video_text = self.loaded_lang_annotation.get("video_text", "")
                 if video_text:
                     self.lang_anno[(0, 0)] = video_text
+                loaded_robot_setup = self.loaded_lang_annotation.get("robot_setup")
+                if isinstance(loaded_robot_setup, dict):
+                    self.robot_setup_annotation = normalize_robot_setup(loaded_robot_setup)
                 loaded_scene = self.loaded_lang_annotation.get("scene")
                 if isinstance(loaded_scene, dict):
                     self.scene_annotation = strip_legacy_scene_fields(loaded_scene)
@@ -2127,6 +2243,7 @@ class VideoPlayer(QWidget):
                 self.update_keyframe_bar()
             video_text = self.lang_anno.get((0, 0), "")
             self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
+            self.update_robot_setup_display()
             self.update_scene_display()
             self.update_clip_annotation_list()
         
@@ -2924,6 +3041,26 @@ class VideoPlayer(QWidget):
             video_description = dialog.get_text().strip()
             self.lang_anno[(0, 0)] = video_description
             self.video_lang_input.setText(f"视频整体描述: {video_description}")
+
+    def update_robot_setup_display(self):
+        if not hasattr(self, "robot_setup_input"):
+            return
+        if not self.robot_setup_annotation:
+            self.robot_setup_input.clear()
+            return
+        left_type = self.robot_setup_annotation.get("left_effector_type", "unknown")
+        right_type = self.robot_setup_annotation.get("right_effector_type", "unknown")
+        self.robot_setup_input.setText(
+            "末端类型: "
+            f"左={EFFECTOR_TYPE_DISPLAY_NAMES.get(left_type, left_type)} ({left_type}) | "
+            f"右={EFFECTOR_TYPE_DISPLAY_NAMES.get(right_type, right_type)} ({right_type})"
+        )
+
+    def add_robot_setup_annotation(self):
+        dialog = RobotSetupDialog(self.robot_setup_annotation, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.robot_setup_annotation = dialog.get_robot_setup_result()
+            self.update_robot_setup_display()
 
     def update_scene_display(self):
         if not hasattr(self, "scene_lang_input"):

@@ -16,6 +16,7 @@ from skill_schema import (
     load_coordination_modes,
     load_scene_templates,
     load_skill_templates,
+    normalize_legacy_annotation,
     render_scene_text,
     render_subtask_text,
     validate_annotation,
@@ -52,7 +53,7 @@ def action(skill_id, values):
 
 def pull_values():
     return {
-        "subject": "right_gripper",
+        "subject": "right_effector",
         "interaction_target": "drawer",
         "pull_anchor": "drawer handle",
         "source_anchor": "closed position",
@@ -64,13 +65,13 @@ def pull_values():
 
 def both_pull_values():
     values = pull_values()
-    values["subject"] = "both_grippers"
+    values["subject"] = "both_effectors"
     return values
 
 
 def pick_values():
     return {
-        "subject": "left_gripper",
+        "subject": "left_effector",
         "manipulated_object": "cup",
         "source_anchor": "table",
         "grasp_anchor": "cup body",
@@ -80,7 +81,7 @@ def pick_values():
 
 def right_pick_values():
     values = pick_values()
-    values["subject"] = "right_gripper"
+    values["subject"] = "right_effector"
     return values
 
 
@@ -98,7 +99,7 @@ def fold_values(subject, folded_part_anchor, state_change):
 
 def place_values():
     return {
-        "subject": "right_gripper",
+        "subject": "right_effector",
         "manipulated_object": "book",
         "placement_relation": "on",
         "destination_anchor": "table",
@@ -107,7 +108,7 @@ def place_values():
 
 def twist_values():
     return {
-        "subject": "right_gripper",
+        "subject": "right_effector",
         "interaction_target": "bottle cap",
         "twist_anchor": "cap",
         "rotation_direction": "clockwise",
@@ -182,6 +183,10 @@ def annotation(subtasks):
             },
             "frames": 21,
         },
+        "robot_setup": {
+            "left_effector_type": "dexterous_hand",
+            "right_effector_type": "dexterous_hand",
+        },
         "video_text": "机器人完成抽屉和杯子的操作",
         "scene": scene(),
         "subtasks": subtasks,
@@ -249,9 +254,9 @@ def main():
         raise AssertionError("pull slots mismatch")
     pass_case("pull 的 UI slot 列表正确")
 
-    if "left_gripper" not in SKILLS["pull"]["enum_constraints"]["subject"]:
-        raise AssertionError("subject enum missing left_gripper")
-    if SKILLS["pull"]["enum_display_names"]["subject"]["left_gripper"] != "左夹爪":
+    if "left_effector" not in SKILLS["pull"]["enum_constraints"]["subject"]:
+        raise AssertionError("subject enum missing left_effector")
+    if SKILLS["pull"]["enum_display_names"]["subject"]["left_effector"] != "左末端":
         raise AssertionError("subject enum display name mismatch")
     if SKILLS["place"]["enum_display_names"]["placement_relation"]["on"] != "在...上":
         raise AssertionError("placement_relation display name mismatch")
@@ -280,12 +285,27 @@ def main():
     base_pull = action("pull", pull_values())
     base_pick = action("pick", pick_values())
     expected_pull_text = (
-        "right_gripper pull drawer at drawer handle from closed position "
+        "right_effector pull drawer at drawer handle from closed position "
         "to/toward open position, causing drawer to opened"
     )
     if base_pull["text"] != expected_pull_text:
         raise AssertionError(base_pull["text"])
     pass_case("action.text 自动生成正确")
+
+    legacy_annotation = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    legacy_annotation.pop("robot_setup")
+    legacy_action = legacy_annotation["subtasks"][0]["actions"][0]
+    legacy_action["subject"] = "right_gripper"
+    legacy_action["text"] = legacy_action["text"].replace("right_effector", "right_gripper")
+    legacy_annotation["subtasks"][0]["text"] = legacy_action["text"]
+    normalized_legacy = normalize_legacy_annotation(legacy_annotation, SKILLS)
+    if normalized_legacy["robot_setup"]["right_effector_type"] != "gripper":
+        raise AssertionError("legacy right_gripper should infer right_effector_type=gripper")
+    if normalized_legacy["subtasks"][0]["actions"][0]["subject"] != "right_effector":
+        raise AssertionError("legacy right_gripper should normalize to right_effector")
+    if validate_annotation(normalized_legacy, SKILLS, COORDINATION_MODES):
+        raise AssertionError(validate_annotation(normalized_legacy, SKILLS, COORDINATION_MODES))
+    pass_case("legacy gripper subject 可迁移为 effector + robot_setup")
 
     none_action = action("none", none_values())
     expected_none_text = "both_arms performs no task-relevant manipulation"
@@ -304,21 +324,21 @@ def main():
     )
     both_pull = action("pull", both_pull_values())
     assert_ok(
-        "both_grippers 允许 both_same_skill_same_object",
+        "both_effectors 允许 both_same_skill_same_object",
         annotation([subtask(0, 10, "both_same_skill_same_object", [both_pull])]),
     )
-    left_fold = action("fold", fold_values("left_gripper", "left sleeve", "left sleeve folded"))
-    right_fold = action("fold", fold_values("right_gripper", "right sleeve", "right sleeve folded"))
+    left_fold = action("fold", fold_values("left_effector", "left sleeve", "left sleeve folded"))
+    right_fold = action("fold", fold_values("right_effector", "right sleeve", "right sleeve folded"))
     assert_ok(
-        "left_gripper+right_gripper 允许 both_same_skill_same_object",
+        "left_effector+right_effector 允许 both_same_skill_same_object",
         annotation([subtask(0, 10, "both_same_skill_same_object", [left_fold, right_fold])]),
     )
     assert_fail(
-        "both_grippers 不允许 single_hand",
+        "both_effectors 不允许 single_hand",
         annotation([subtask(0, 10, "single_hand", [both_pull])]),
     )
     assert_fail(
-        "单侧 gripper 单 action 不允许 both_same_skill_same_object",
+        "单侧 effector 单 action 不允许 both_same_skill_same_object",
         annotation([subtask(0, 10, "both_same_skill_same_object", [base_pull])]),
     )
     assert_fail(
@@ -361,6 +381,14 @@ def main():
     assert_fail("缺 episode 报错", bad)
 
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad.pop("robot_setup")
+    assert_fail("缺 robot_setup 报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
+    bad["robot_setup"]["left_effector_type"] = "human_hand"
+    assert_fail("robot_setup effector_type 非法时报错", bad)
+
+    bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
     bad["episode"]["frames"] = 0
     assert_fail("episode.frames 非正数时报错", bad)
 
@@ -399,7 +427,7 @@ def main():
 
     bad = copy.deepcopy(annotation([subtask(0, 10, "primary_with_support", [base_pull])]))
     bad["subtasks"][0]["actions"][0]["subject"] = "human"
-    bad["subtasks"][0]["actions"][0]["text"] = bad["subtasks"][0]["actions"][0]["text"].replace("right_gripper", "human")
+    bad["subtasks"][0]["actions"][0]["text"] = bad["subtasks"][0]["actions"][0]["text"].replace("right_effector", "human")
     bad["subtasks"][0]["text"] = bad["subtasks"][0]["actions"][0]["text"]
     assert_fail("subject 非法时报错", bad)
 

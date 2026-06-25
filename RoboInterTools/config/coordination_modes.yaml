@@ -5,8 +5,8 @@ coordination_modes:
     main_skill_rule: actions[0].skill
     action_rule: 一个 action，通常是一只手或一个夹爪完成主要动作
     allowed_primary_subjects:
-      - left_gripper
-      - right_gripper
+      - left_effector
+      - right_effector
       - base
       - robot_body
       - left_arm
@@ -19,10 +19,10 @@ coordination_modes:
     main_skill_rule: 共同 skill
     action_rule: 两个 action，skill 相同，核心对象相同
     allowed_primary_subjects:
-      - both_grippers
+      - both_effectors
       - both_arms
-      - left_gripper
-      - right_gripper
+      - left_effector
+      - right_effector
       - left_arm
       - right_arm
 
@@ -32,8 +32,8 @@ coordination_modes:
     main_skill_rule: 共同 skill
     action_rule: 两个 action，skill 相同，核心对象不同
     allowed_primary_subjects:
-      - left_gripper
-      - right_gripper
+      - left_effector
+      - right_effector
       - left_arm
       - right_arm
       - unknown
@@ -44,8 +44,8 @@ coordination_modes:
     main_skill_rule: 主动作 skill
     action_rule: 主手 action 决定 subtask skill；辅助手作为 secondary action
     allowed_primary_subjects:
-      - left_gripper
-      - right_gripper
+      - left_effector
+      - right_effector
       - left_arm
       - right_arm
       - unknown
@@ -56,8 +56,8 @@ coordination_modes:
     main_skill_rule: 主要语义目标的 skill
     action_rule: 两个 action，skill 不同；另一只手作为 secondary action
     allowed_primary_subjects:
-      - left_gripper
-      - right_gripper
+      - left_effector
+      - right_effector
       - left_arm
       - right_arm
       - unknown
@@ -68,8 +68,8 @@ coordination_modes:
     main_skill_rule: Transfer 或 Pick，按语义定
     action_rule: 可拆成双手相关 actions；主 skill 在 transfer / pick 中按语义选择
     allowed_primary_subjects:
-      - left_gripper
-      - right_gripper
+      - left_effector
+      - right_effector
       - left_arm
       - right_arm
       - unknown
