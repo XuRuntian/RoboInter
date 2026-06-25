@@ -4,3 +4,4 @@ numpy
 Pillow==10.4.0
 lmdb
 pytz
+imageio-ffmpeg

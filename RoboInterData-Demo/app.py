@@ -1,14 +1,22 @@
+import os
+
+for proxy_key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+    proxy_value = os.environ.get(proxy_key, "")
+    proxy_scheme = proxy_value.lower().split(":", 1)[0]
+    if proxy_scheme in {"socks", "socks4", "socks4a", "socks5", "socks5h"}:
+        os.environ.pop(proxy_key, None)
+
 import gradio as gr
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import random
-import os
+import subprocess
 import tempfile
 import time
 
 # ==================== Load from Config ====================
-from config import VIDEO_ROOT, ANNOTATIONS
+from config import VIDEO_ROOT, VIDEO_PATHS, ANNOTATIONS, get_video_names
 
 # ==================== Color Configuration ====================
 COLORS = {
@@ -37,17 +45,117 @@ COLORS_RGB = {
 # ==================== Utility Functions ====================
 def get_video_list():
     """Get all video names"""
-    return list(ANNOTATIONS.keys())
+    return get_video_names()
+
+
+def resolve_video_path(video_name):
+    """Resolve a display name to an actual video file path."""
+    if not video_name:
+        return ""
+    if os.path.exists(str(video_name)):
+        return str(video_name)
+    mapped_path = VIDEO_PATHS.get(video_name)
+    if mapped_path and os.path.exists(mapped_path):
+        return mapped_path
+    candidate = os.path.join(VIDEO_ROOT, f"{video_name}.mp4")
+    if os.path.exists(candidate):
+        return candidate
+    return candidate
+
+
+def ffmpeg_binary():
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
+def probe_video_info(video_path):
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height",
+        "-of",
+        "csv=p=0",
+        video_path,
+    ]
+    try:
+        output = subprocess.check_output(cmd, text=True).strip().splitlines()[0]
+        codec, width, height = output.split(",")
+        return codec, int(width), int(height)
+    except Exception as exc:
+        print(f"Warning: ffprobe failed for {video_path}: {exc}")
+        return None, None, None
+
+
+def probe_video_shape(video_path):
+    _, width, height = probe_video_info(video_path)
+    return width, height
+
+
+def load_video_frames_cv2(video_path):
+    cap = cv2.VideoCapture(video_path)
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(frame)
+    cap.release()
+    return frames
+
+
+def load_video_frames_ffmpeg(video_path):
+    width, height = probe_video_shape(video_path)
+    if not width or not height:
+        return []
+
+    cmd = [
+        ffmpeg_binary(),
+        "-v",
+        "error",
+        "-i",
+        video_path,
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-",
+    ]
+    frame_size = width * height * 3
+    frames = []
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        assert proc.stdout is not None
+        while True:
+            raw_frame = proc.stdout.read(frame_size)
+            if len(raw_frame) < frame_size:
+                break
+            frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
+            frames.append(frame.copy())
+        proc.stdout.close()
+        proc.wait()
+    except Exception as exc:
+        print(f"Warning: ffmpeg failed for {video_path}: {exc}")
+        return []
+    return frames
 
 
 def load_video_frames(video_name):
     """Load all frames of a video"""
-    video_path = os.path.join(VIDEO_ROOT, f"{video_name}.mp4")
+    video_path = resolve_video_path(video_name)
 
     if not os.path.exists(video_path):
         # If video does not exist, generate placeholder frames
         # Determine frame count based on annotation data
-        if video_name in ANNOTATIONS:
+        if video_name in ANNOTATIONS and ANNOTATIONS[video_name]:
             max_frame = max(ANNOTATIONS[video_name].keys()) + 1
         else:
             max_frame = 100
@@ -62,20 +170,19 @@ def load_video_frames(video_name):
                        1, (200, 200, 200), 2)
             cv2.putText(img, f"Video: {video_name}", (150, 280), cv2.FONT_HERSHEY_SIMPLEX,
                        0.6, (150, 150, 150), 1)
-            cv2.putText(img, "(Video file not found)", (180, 320), cv2.FONT_HERSHEY_SIMPLEX,
+            cv2.putText(img, f"(Video file not found: {video_path})", (40, 320), cv2.FONT_HERSHEY_SIMPLEX,
                        0.5, (150, 100, 100), 1)
             frames.append(img)
         return frames
 
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frames.append(frame)
-    cap.release()
+    codec, _, _ = probe_video_info(video_path)
+    if codec == "av1":
+        frames = load_video_frames_ffmpeg(video_path)
+    else:
+        frames = load_video_frames_cv2(video_path)
+    if not frames:
+        print(f"OpenCV could not decode {video_path}; trying ffmpeg fallback.")
+        frames = load_video_frames_ffmpeg(video_path)
 
     # print(f"Loaded {len(frames)} frames from {video_name}.mp4")
     return frames
@@ -86,6 +193,8 @@ def get_annotation_for_frame(video_name, frame_idx):
     if video_name not in ANNOTATIONS:
         return None
     video_annot = ANNOTATIONS[video_name]
+    if not video_annot:
+        return None
 
     # Find annotation for the corresponding frame (annotations might not exist for every frame)
     if frame_idx in video_annot:
@@ -433,6 +542,10 @@ def render_frame(video_name, frame_idx, display_mode, frames_cache):
 # ==================== Gradio Interface ====================
 def create_app():
     video_list = get_video_list()
+    if video_list:
+        print(f"Loaded {len(video_list)} videos for review")
+    else:
+        print("Warning: no videos found. Check demo_data or RoboInterTools config paths.")
 
     with gr.Blocks(
         title="Video Annotation Visualizer",
