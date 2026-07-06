@@ -29,6 +29,7 @@ TOOLS_CONFIG_PATH = os.environ.get(
 
 VIDEO_PATHS = {}
 VIDEO_VIEWS = {}
+EPISODE_METADATA = {}
 
 # Coordinate scaling function
 def scale_coordinates(annotations, scale_x=4.0, scale_y=4.0):
@@ -326,7 +327,7 @@ def convert_language_annotation(annotation):
 def load_robointertools_annotations(config_path):
     server_config = parse_server_config(config_path)
     if not server_config:
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
     root_dir = server_config.get("root_dir") or str(Path(config_path).resolve().parents[1])
     pool_entries = collect_pool_entries(server_config, root_dir)
@@ -335,6 +336,7 @@ def load_robointertools_annotations(config_path):
     annotations = {}
     video_paths = {}
     video_views = {}
+    episode_metadata = {}
 
     for save_path in save_paths:
         try:
@@ -371,6 +373,18 @@ def load_robointertools_annotations(config_path):
         if primary_path:
             video_paths[video_name] = str(primary_path)
 
+        episode_metadata[video_name] = {
+            "source": "robointertools_npz",
+            "episode_id": str(episode.get("episode_id") or video_name),
+            "task_id": str(episode.get("task_id") or pool_info.get("task_id") or ""),
+            "dataset_name": str(episode.get("dataset_name") or ""),
+            "annotation_path": save_path,
+            "video_path": str(episode.get("video_path") or pool_info.get("video_path") or ""),
+            "primary_video_path": str(primary_path or ""),
+            "views": {str(name): str(path) for name, path in (views or {}).items()},
+            "frames": episode.get("frames"),
+        }
+
     seen_task_ids = set()
     for pool_info in pool_entries.values():
         task_id = str(pool_info.get("task_id") or "")
@@ -389,8 +403,19 @@ def load_robointertools_annotations(config_path):
         if views and video_name not in video_views:
             video_views[video_name] = {str(name): str(path) for name, path in views.items()}
         annotations.setdefault(video_name, {})
+        episode_metadata.setdefault(video_name, {
+            "source": "robointertools_pool",
+            "episode_id": video_name,
+            "task_id": task_id,
+            "dataset_name": "",
+            "annotation_path": str(pool_info.get("save_path") or pool_info.get("anno_path") or ""),
+            "video_path": str(primary_path or ""),
+            "primary_video_path": str(primary_path or ""),
+            "views": {str(name): str(path) for name, path in (views or {}).items()},
+            "frames": None,
+        })
 
-    return annotations, video_paths, video_views
+    return annotations, video_paths, video_views, episode_metadata
 
 
 def get_video_names():
@@ -403,7 +428,20 @@ def get_video_names():
 
 # Load data. Keep LMDB compatibility, then overlay directly saved tool output.
 ANNOTATIONS = load_annotations_from_lmdb(LMDB_PATH)
-_tool_annotations, _tool_video_paths, _tool_video_views = load_robointertools_annotations(TOOLS_CONFIG_PATH)
+for _video_name in ANNOTATIONS:
+    EPISODE_METADATA[_video_name] = {
+        "source": "lmdb",
+        "episode_id": _video_name,
+        "task_id": _video_name,
+        "dataset_name": "",
+        "annotation_path": LMDB_PATH,
+        "video_path": str(Path(VIDEO_ROOT) / f"{_video_name}.mp4"),
+        "primary_video_path": str(Path(VIDEO_ROOT) / f"{_video_name}.mp4"),
+        "views": {},
+        "frames": len(ANNOTATIONS.get(_video_name, {})),
+    }
+_tool_annotations, _tool_video_paths, _tool_video_views, _tool_episode_metadata = load_robointertools_annotations(TOOLS_CONFIG_PATH)
 ANNOTATIONS.update(_tool_annotations)
 VIDEO_PATHS.update(_tool_video_paths)
 VIDEO_VIEWS.update(_tool_video_views)
+EPISODE_METADATA.update(_tool_episode_metadata)

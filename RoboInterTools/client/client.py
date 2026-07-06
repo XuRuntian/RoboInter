@@ -849,9 +849,9 @@ class VideoPlayer(QWidget):
         self.mode, self.username, self.ip_address, self.port, self.time = self.mode_choose()
         if self.mode == '语言标注':
             #resize the window
-            self.setFixedSize(1500, 760)
+            self.setFixedSize(1500, 860)
         else:
-            self.setFixedSize(1900, 730)
+            self.setFixedSize(1900, 820)
         ###########################################################
         #################### Video Area Layout ####################
         ###########################################################
@@ -1230,20 +1230,27 @@ class VideoPlayer(QWidget):
         
         self.toolbar_layout.addLayout(self.tips_text_layout)
         
-        if self.mode != '语言标注':
-            # 添加视频名称展示区域
-            video_name_layout = QHBoxLayout()
-            video_name_title = QLabel("视频名称: ", self)
-            video_name_title.setAlignment(Qt.AlignLeft)
-            video_name_title.setStyleSheet("color: grey; font-weight: bold;")
-            video_name_layout.addWidget(video_name_title)
-            self.video_name_input = QLineEdit(self)
-            self.video_name_input.setReadOnly(True)
-            self.video_name_input.setAlignment(Qt.AlignLeft)
-            self.video_name_input.setStyleSheet("color: grey; font-weight: bold;")
-            self.video_name_input.setFixedSize(610, 30)
-            video_name_layout.addWidget(self.video_name_input)
-            self.toolbar_layout.addLayout(video_name_layout)
+        # 添加当前数据路径展示区域，方便人工质检定位 episode
+        video_name_layout = QHBoxLayout()
+        video_name_title = QLabel("当前数据: ", self)
+        video_name_title.setAlignment(Qt.AlignLeft)
+        video_name_title.setStyleSheet("color: grey; font-weight: bold;")
+        video_name_layout.addWidget(video_name_title)
+        self.video_name_input = QLineEdit(self)
+        self.video_name_input.setReadOnly(True)
+        self.video_name_input.setAlignment(Qt.AlignLeft)
+        self.video_name_input.setStyleSheet("color: grey; font-weight: bold;")
+        self.video_name_input.setFixedSize(610, 30)
+        video_name_layout.addWidget(self.video_name_input)
+        self.toolbar_layout.addLayout(video_name_layout)
+
+        self.episode_path_input = QTextEdit(self)
+        self.episode_path_input.setReadOnly(True)
+        self.episode_path_input.setFixedSize(610, 95)
+        self.episode_path_input.setStyleSheet(
+            "background-color: #E3E3E3; font-weight: bold; font-family: monospace;"
+        )
+        self.toolbar_layout.addWidget(self.episode_path_input)
         
         main_layout.addLayout(self.toolbar_layout)
         self.setLayout(main_layout)
@@ -1287,6 +1294,7 @@ class VideoPlayer(QWidget):
         self.key_frame_mode = 'start'
         self.sam_point_anno = dict()
         self.lang_only_anno = dict()
+        self.save_path = None
         self.video_path = None
         self.primary_video_path = None
         self.episode_info = None
@@ -1740,6 +1748,54 @@ class VideoPlayer(QWidget):
             "views": {str(name): str(path) for name, path in views.items()},
             "frames": int(self.frame_count),
         }
+
+    def episode_display_name(self):
+        base_info = dict(self.episode_info or {})
+        episode_id = str(base_info.get("episode_id") or "").strip()
+        if episode_id:
+            return episode_id
+        if self.video_path and not os.path.exists(str(self.video_path)):
+            return os.path.basename(str(self.video_path).rstrip("/"))
+        path = self.primary_video_path or self.video_path or ""
+        return os.path.splitext(os.path.basename(str(path)))[0]
+
+    def format_episode_path_info(self):
+        base_info = dict(self.episode_info or {})
+        views = base_info.get("views") if isinstance(base_info.get("views"), dict) else {}
+        primary_path = (
+            base_info.get("primary_video_path")
+            or self.primary_video_path
+            or self.video_path
+            or ""
+        )
+        lines = [
+            f"episode_id: {base_info.get('episode_id') or self.episode_display_name()}",
+            f"task_id: {base_info.get('task_id') or self.video_path or ''}",
+            f"dataset: {base_info.get('dataset_name') or ''}",
+            f"save_path: {getattr(self, 'save_path', '') or ''}",
+            f"primary_video_path: {primary_path}",
+        ]
+        if base_info.get("video_path") and base_info.get("video_path") != primary_path:
+            lines.append(f"video_path: {base_info.get('video_path')}")
+        if self.frame_count:
+            lines.append(f"frames: {self.frame_count}")
+        elif base_info.get("frames"):
+            lines.append(f"frames: {base_info.get('frames')}")
+        if views:
+            lines.append("views:")
+            for view_name, view_path in sorted(views.items()):
+                lines.append(f"  {view_name}: {view_path}")
+        return "\n".join(lines)
+
+    def update_episode_path_display(self):
+        if not hasattr(self, "video_name_input") or not hasattr(self, "episode_path_input"):
+            return
+        if not self.video_path and not self.primary_video_path and not getattr(self, 'save_path', ''):
+            self.video_name_input.clear()
+            self.episode_path_input.clear()
+            return
+        self.video_name_input.setText(self.episode_display_name())
+        self.episode_path_input.setText(self.format_episode_path_info())
        
     def save_lang_anno(self):
         self.progress = QProgressDialog("请等待，正在储存标注结果...", None, 0, 0, self)
@@ -1923,6 +1979,10 @@ class VideoPlayer(QWidget):
         self.clip_lang_input.clear()
         self.update_clip_annotation_list()
         self.video_position_label.setText(f"帧: -/-")
+        if hasattr(self, "video_name_input"):
+            self.video_name_input.clear()
+        if hasattr(self, "episode_path_input"):
+            self.episode_path_input.clear()
     
     def remove_last_sam_annotation(self):
         if len(self.tracking_points_sam) == 0:
@@ -2090,6 +2150,8 @@ class VideoPlayer(QWidget):
         if self.mode != '语言标注':
             video, save_path, video_path, hist_num, \
                 one_anno_num, all_one_anno_num, two_anno_num, all_two_anno_num, three_anno_num, all_three_anno_num = res
+            self.primary_video_path = video_path
+            self.episode_info = {}
         else:
             episode_info = {}
             if len(res) == 7:
@@ -2140,8 +2202,10 @@ class VideoPlayer(QWidget):
         
         if video is not None:
             self.load_video(video)
+            self.update_episode_path_display()
             self.progress.close()
         else:
+            self.update_episode_path_display()
             self.progress.close()
             self.smart_message("视频加载失败，请检查网络设置")
             return

@@ -16,7 +16,7 @@ import tempfile
 import time
 
 # ==================== Load from Config ====================
-from config import VIDEO_ROOT, VIDEO_PATHS, ANNOTATIONS, get_video_names
+from config import EPISODE_METADATA, VIDEO_ROOT, VIDEO_PATHS, ANNOTATIONS, get_video_names
 
 # ==================== Color Configuration ====================
 COLORS = {
@@ -61,6 +61,31 @@ def resolve_video_path(video_name):
     if os.path.exists(candidate):
         return candidate
     return candidate
+
+
+def format_episode_metadata(video_name, frame_count=None):
+    meta = EPISODE_METADATA.get(video_name, {})
+    resolved_video_path = resolve_video_path(video_name)
+    lines = [
+        f"Episode ID: {meta.get('episode_id') or video_name or ''}",
+        f"Task ID: {meta.get('task_id') or ''}",
+        f"Dataset: {meta.get('dataset_name') or ''}",
+        f"Source: {meta.get('source') or ''}",
+        f"Annotation path: {meta.get('annotation_path') or ''}",
+        f"Primary video path: {meta.get('primary_video_path') or meta.get('video_path') or ''}",
+        f"Resolved video path: {resolved_video_path}",
+    ]
+    if frame_count is not None:
+        lines.append(f"Loaded frames: {frame_count}")
+    elif meta.get("frames") is not None:
+        lines.append(f"Frames: {meta.get('frames')}")
+
+    views = meta.get("views") if isinstance(meta.get("views"), dict) else {}
+    if views:
+        lines.append("Views:")
+        for view_name, view_path in sorted(views.items()):
+            lines.append(f"  {view_name}: {view_path}")
+    return "\n".join(lines)
 
 
 def ffmpeg_binary():
@@ -606,6 +631,11 @@ def create_app():
             font-family: monospace;
             line-height: 1.6;
         }
+        .metadata-box textarea {
+            font-family: monospace !important;
+            font-size: 12px !important;
+            line-height: 1.45 !important;
+        }
         """
     ) as app:
         # State
@@ -673,6 +703,13 @@ def create_app():
                     interactive=False,
                     elem_classes=["info-box"]
                 )
+                episode_metadata_text = gr.Textbox(
+                    label="Episode Path / Metadata",
+                    interactive=False,
+                    lines=8,
+                    max_lines=14,
+                    elem_classes=["metadata-box"]
+                )
 
             with gr.Column(scale=1, elem_classes=["control-panel"]):
                 # Video Selection
@@ -720,6 +757,7 @@ def create_app():
             frames = load_video_frames(video_name)
             max_frame = len(frames) - 1 if frames else 0
             info = f"Loaded video: {video_name} ({len(frames)} frames)" if frames else "Failed to load video"
+            metadata_info = format_episode_metadata(video_name, len(frames) if frames else None)
             # Get the first frame as initial display
             first_frame = frames[0] if frames else None
             return (
@@ -728,6 +766,7 @@ def create_app():
                 gr.update(maximum=max_frame, value=0),
                 first_frame,
                 info,
+                metadata_info,
                 "original",
                 None,  # Clear video path
                 None   # Clear language mode
@@ -898,7 +937,7 @@ def create_app():
         video_dropdown.change(
             load_video,
             inputs=[video_dropdown],
-            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, current_mode, current_video_path, current_language_mode]
+            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, episode_metadata_text, current_mode, current_video_path, current_language_mode]
         ).then(
             lambda: tuple(update_button_styles("original")) + (gr.update(visible=False),),
             outputs=[b for b, _ in all_buttons] + [language_text]
@@ -1034,7 +1073,7 @@ def create_app():
         app.load(
             load_video,
             inputs=[video_dropdown],
-            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, current_mode, current_video_path, current_language_mode]
+            outputs=[current_video, frames_cache, frame_slider, frame_image, info_text, episode_metadata_text, current_mode, current_video_path, current_language_mode]
         ).then(
             lambda: tuple(update_button_styles("original")) + (gr.update(visible=False),),
             outputs=[b for b, _ in all_buttons] + [language_text]
