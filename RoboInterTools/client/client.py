@@ -985,6 +985,12 @@ class VideoPlayer(QWidget):
         self.previous_button.clicked.connect(self.previous_video_and_load)
         self.previous_button.setDisabled(True)
         video_load_button_layout.addWidget(self.previous_button)
+
+        self.choose_video_button = QPushButton("选择已保存/修复", self)
+        self.choose_video_button.clicked.connect(self.select_repair_video_and_load)
+        if self.mode != '语言标注':
+            self.choose_video_button.hide()
+        video_load_button_layout.addWidget(self.choose_video_button)
         
         self.next_button = QPushButton("保存并加载", self)
         self.next_button.clicked.connect(self.next_video_and_load)
@@ -1298,6 +1304,14 @@ class VideoPlayer(QWidget):
         self.video_path = None
         self.primary_video_path = None
         self.episode_info = None
+        self.requested_video_path = ""
+        self.clear_forward_on_specific_load = False
+        self.navigation_history = []
+        self.forward_video_stack = []
+        self.review_mode = False
+        self.review_task_ids = []
+        self.pending_review_mode = None
+        self.pending_review_task_ids = []
         self.frame_contact = set()
         
         self.next_video_and_load(is_first=True)
@@ -1542,6 +1556,24 @@ class VideoPlayer(QWidget):
         if is_first:
             self.load_video_async()
         else:            
+            if self.mode == '语言标注' and self.review_mode:
+                self.load_review_neighbor(1)
+                return
+
+            if self.mode == '语言标注' and self.forward_video_stack:
+                target_video_path = self.forward_video_stack.pop()
+                if self.has_anno():
+                    if not self.ask_yes_no("提示", "确认保存并返回下一条已访问视频？"):
+                        self.forward_video_stack.append(target_video_path)
+                        return
+                    self.video_position_label.setText(f"帧: -/-")
+                    res = self.save_lang_anno()
+                    if res == -1:
+                        self.forward_video_stack.append(target_video_path)
+                        return
+                self.load_specific_video_async(target_video_path, clear_forward=False)
+                return
+
             if self.has_anno() and not self.is_pre_button.isChecked():
                 if not self.ask_yes_no("提示", "确认保存并加载下一个视频？"):
                     return
@@ -1553,6 +1585,8 @@ class VideoPlayer(QWidget):
                 
                 if res == -1:
                     return
+                if self.mode == '语言标注':
+                    self.forward_video_stack.clear()
                 self.clear_video()
                 self.load_video_async()
             
@@ -1581,6 +1615,28 @@ class VideoPlayer(QWidget):
         if not self.video_path:
             self.smart_message("当前没有已加载视频，无法返回上一条")
             return
+        if self.mode == '语言标注' and self.review_mode:
+            self.load_review_neighbor(-1)
+            return
+
+        if self.mode == '语言标注':
+            if len(self.navigation_history) < 2:
+                self.smart_message("当前没有上一条已访问视频")
+                return
+            if self.has_anno():
+                if not self.ask_yes_no(
+                    "提示",
+                    "当前视频有未保存标注。返回上一条会放弃当前未保存修改，是否继续？",
+                    default_yes=False,
+                ):
+                    return
+            current_video_path = self.navigation_history.pop()
+            if current_video_path:
+                self.forward_video_stack.append(current_video_path)
+            target_video_path = self.navigation_history[-1]
+            self.load_specific_video_async(target_video_path, clear_forward=False)
+            return
+
         if self.has_anno():
             if not self.ask_yes_no(
                 "提示",
@@ -1591,6 +1647,49 @@ class VideoPlayer(QWidget):
         self.is_pre_button.setChecked(True)
         self.clear_video()
         self.load_video_async()
+
+    def load_specific_video_async(
+        self,
+        video_path,
+        clear_forward=True,
+        review_mode=None,
+        review_task_ids=None,
+    ):
+        if not video_path:
+            return
+        self.requested_video_path = video_path
+        self.clear_forward_on_specific_load = clear_forward
+        self.pending_review_mode = review_mode
+        self.pending_review_task_ids = list(review_task_ids or [])
+        self.clear_video()
+        self.load_video_async()
+
+    def load_review_neighbor(self, offset):
+        if not self.review_task_ids:
+            self.smart_message("当前没有可质检的已保存 episode 列表")
+            return
+        try:
+            current_idx = self.review_task_ids.index(self.video_path)
+        except ValueError:
+            self.smart_message("当前视频不在已保存质检列表中，请重新选择 episode")
+            return
+        target_idx = current_idx + offset
+        if target_idx < 0 or target_idx >= len(self.review_task_ids):
+            self.smart_message("已到质检列表边界")
+            return
+        target_video_path = self.review_task_ids[target_idx]
+        if self.has_anno():
+            if not self.ask_yes_no("提示", "确认保存当前修改并打开相邻已保存 episode？"):
+                return
+            res = self.save_lang_anno()
+            if res == -1:
+                return
+        self.load_specific_video_async(
+            target_video_path,
+            clear_forward=False,
+            review_mode=True,
+            review_task_ids=self.review_task_ids,
+        )
 
     def has_anno(self):
         if self.mode == '语言标注':
@@ -1660,6 +1759,17 @@ class VideoPlayer(QWidget):
     
     def request_video(self):
         # try:
+        if self.mode == '语言标注' and self.requested_video_path:
+            return request_video_and_anno(
+                self.ip_address,
+                self.port,
+                'lang',
+                self.username,
+                'repair',
+                self.video_path,
+                repair_video_path=self.requested_video_path,
+            )
+
         if self.is_pre_button.isChecked():
             self.button_mode = 'pre'
             self.is_pre_button.setChecked(False)
@@ -2076,13 +2186,15 @@ class VideoPlayer(QWidget):
         if not stats or not isinstance(stats, dict):
             return []
         user_stats = (stats.get("per_user", {}) or {}).get(self.username, {}) or {}
-        items = user_stats.get("claimed_items", []) or []
+        items = user_stats.get("review_items") or user_stats.get("claimed_items", []) or []
         return [item for item in items if isinstance(item, dict) and item.get("task_id")]
 
     def choose_repair_video(self, stats, message):
         items = self.repair_items_from_stats(stats)
         if not items:
-            return ""
+            return "", []
+
+        saved_task_ids = [item["task_id"] for item in items if item.get("saved")]
 
         dialog = QDialog(self)
         dialog.setWindowTitle("选择要修复的标注")
@@ -2096,10 +2208,20 @@ class VideoPlayer(QWidget):
         repair_list = QListWidget(dialog)
         repair_list.setFixedSize(730, 300)
         for idx, item in enumerate(items):
-            status = "已保存" if item.get("saved") else "已领取未保存"
-            display_name = item.get("display_name") or item.get("task_id")
+            if item.get("saved"):
+                status = "已保存"
+            elif item.get("source") == "claimed":
+                status = "已领取未保存"
+            else:
+                status = "未标注"
+            episode_index = item.get("episode_index")
+            index_text = f"episode_{int(episode_index):06d}" if episode_index is not None else ""
+            display_name = item.get("episode_id") or item.get("display_name") or item.get("task_id")
             task_id = item.get("task_id")
-            list_item = QListWidgetItem(f"{idx + 1}. [{status}] {display_name}\n{task_id}")
+            prefix = f"{idx + 1}. [{status}]"
+            if index_text:
+                prefix = f"{prefix} {index_text}"
+            list_item = QListWidgetItem(f"{prefix} {display_name}\n{task_id}")
             list_item.setData(Qt.UserRole, task_id)
             repair_list.addItem(list_item)
         repair_list.setCurrentRow(0)
@@ -2113,9 +2235,40 @@ class VideoPlayer(QWidget):
         layout.addWidget(button_box)
 
         if dialog.exec_() != QDialog.Accepted:
-            return ""
+            return "", []
         selected_item = repair_list.currentItem()
-        return selected_item.data(Qt.UserRole) if selected_item is not None else ""
+        return (selected_item.data(Qt.UserRole), saved_task_ids) if selected_item is not None else ("", saved_task_ids)
+
+    def select_repair_video_and_load(self):
+        if self.mode != '语言标注':
+            return
+        stats = request_annotation_stats(self.ip_address, self.port, 'lang')
+        message, _ = self.no_video_message(stats)
+        repair_video_path, saved_task_ids = self.choose_repair_video(stats, message)
+        if not repair_video_path:
+            return
+        if self.has_anno():
+            if not self.ask_yes_no(
+                "提示",
+                "当前视频有未保存标注。打开其他视频会放弃当前未保存修改，是否继续？",
+                default_yes=False,
+            ):
+                return
+        self.load_specific_video_async(
+            repair_video_path,
+            clear_forward=True,
+            review_mode=repair_video_path in saved_task_ids,
+            review_task_ids=saved_task_ids,
+        )
+
+    def record_loaded_video(self, video_path):
+        if self.mode != '语言标注' or not video_path:
+            return
+        if self.navigation_history and self.navigation_history[-1] == video_path:
+            return
+        self.navigation_history.append(video_path)
+        if not self.requested_video_path:
+            self.forward_video_stack.clear()
 
     def load_video_callback(self, res):
         if res == 0:
@@ -2126,7 +2279,7 @@ class VideoPlayer(QWidget):
             )
             message, claimed_count = self.no_video_message(stats)
             if self.mode == '语言标注' and claimed_count > 0:
-                repair_video_path = self.choose_repair_video(stats, message)
+                repair_video_path, saved_task_ids = self.choose_repair_video(stats, message)
                 if repair_video_path:
                     repair_res = request_video_and_anno(
                         self.ip_address,
@@ -2138,6 +2291,8 @@ class VideoPlayer(QWidget):
                         repair_video_path=repair_video_path,
                     )
                     if repair_res and repair_res != 0:
+                        self.pending_review_mode = repair_video_path in saved_task_ids
+                        self.pending_review_task_ids = saved_task_ids
                         self.load_video_callback(repair_res)
                         return
                     self.smart_message("没有找到可修复的已领取/已保存视频")
@@ -2180,6 +2335,17 @@ class VideoPlayer(QWidget):
         self.save_path = save_path
         self.video_path = video_path
         self.hist_num = hist_num
+        self.record_loaded_video(video_path)
+        if self.mode == '语言标注' and self.pending_review_mode is not None:
+            self.review_mode = bool(self.pending_review_mode)
+            self.review_task_ids = list(self.pending_review_task_ids or [])
+            self.pending_review_mode = None
+            self.pending_review_task_ids = []
+        if self.mode == '语言标注' and self.requested_video_path:
+            if self.clear_forward_on_specific_load:
+                self.forward_video_stack.clear()
+            self.requested_video_path = ""
+            self.clear_forward_on_specific_load = False
         self.previous_button.setDisabled(False)
         if self.mode == '语言标注':
             self.hist_num_label.setText(f"已保存历史: {self.hist_num}")

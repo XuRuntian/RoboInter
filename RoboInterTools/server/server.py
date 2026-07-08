@@ -9,6 +9,7 @@ import zipfile
 import json
 import os
 import pickle
+import re
 import sys
 import numpy as np
 import yaml
@@ -67,6 +68,35 @@ def infer_dataset_name(primary_path):
         if part.startswith("lerobot_"):
             return part.replace("lerobot_", "", 1)
     return ""
+
+
+EPISODE_PATTERN = re.compile(r"(?:episode|ep)[_-]?(\d+)", re.IGNORECASE)
+
+
+def episode_number_from_text(value):
+    text = str(value or "")
+    matches = EPISODE_PATTERN.findall(text)
+    if matches:
+        return int(matches[-1])
+    stem = os.path.splitext(os.path.basename(text.rstrip("/")))[0]
+    trailing_digits = re.findall(r"(\d+)$", stem)
+    return int(trailing_digits[-1]) if trailing_digits else None
+
+
+def episode_sort_key(task_id, video_info, fallback_index=0):
+    candidates = [task_id]
+    if isinstance(video_info, dict):
+        candidates.extend([
+            video_info.get("video_path"),
+            video_info.get("save_path"),
+            video_info.get("anno_path"),
+        ])
+        candidates.extend((video_info.get("views") or {}).values())
+    for candidate in candidates:
+        episode_number = episode_number_from_text(candidate)
+        if episode_number is not None:
+            return (0, episode_number, fallback_index, str(task_id))
+    return (1, fallback_index, str(task_id))
 
 
 def build_episode_info(task_id, video_info):
@@ -176,6 +206,48 @@ def choose_repair_task(user_pool, user_has, history, requested_task_id=""):
     return None
 
 
+def ordered_task_entries(user_pool, user_has):
+    entries = []
+    seen = set()
+    fallback_index = 0
+    for source, pool in (("remaining", user_pool), ("claimed", user_has)):
+        for task_id, raw_info in (pool or {}).items():
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            video_info = raw_info if isinstance(raw_info, dict) else {}
+            entries.append((task_id, video_info, source, fallback_index))
+            fallback_index += 1
+    return sorted(
+        entries,
+        key=lambda item: episode_sort_key(item[0], item[1], item[3]),
+    )
+
+
+def build_review_items(user_pool, user_has, history):
+    history_set = {item.strip() for item in history}
+    review_items = []
+    for task_id, video_info, source, _ in ordered_task_entries(user_pool, user_has):
+        primary_path = primary_video_path(task_id, video_info)
+        save_path = video_info.get("save_path", "")
+        episode_number = episode_number_from_text(task_id)
+        if episode_number is None:
+            episode_number = episode_number_from_text(primary_path)
+        saved = task_id in history_set or bool(save_path and os.path.exists(save_path))
+        review_items.append({
+            "task_id": task_id,
+            "episode_id": infer_episode_id(task_id, primary_path),
+            "episode_index": episode_number,
+            "display_name": os.path.basename(str(primary_path or task_id)),
+            "primary_video_path": primary_path,
+            "save_path": save_path,
+            "source": source,
+            "saved": saved,
+            "has_annotation_file": bool(save_path and os.path.exists(save_path)),
+        })
+    return review_items
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint."""
@@ -267,7 +339,8 @@ def get_video_lang():
                     is_finished = True
                 else:
                     # Get next video
-                    task_id = next(iter(user_pool))
+                    ordered_remaining = ordered_task_entries(user_pool, {})
+                    task_id = ordered_remaining[0][0]
                     user_has[task_id] = user_pool[task_id].copy()
                     del user_pool[task_id]
 
@@ -634,21 +707,10 @@ def build_annotation_stats(mode):
         user_no = no_annotation.get(user, {}) or {}
         user_has = has_annotation.get(user, {}) or {}
         history = get_user_history(user, mode)
-        history_set = {item.strip() for item in history}
         remaining = len(user_no)
         claimed = len(user_has)
-        claimed_items = []
-        for task_id, video_info in user_has.items():
-            video_info = video_info if isinstance(video_info, dict) else {}
-            primary_path = primary_video_path(task_id, video_info)
-            save_path = video_info.get("save_path", "")
-            claimed_items.append({
-                "task_id": task_id,
-                "display_name": os.path.basename(str(primary_path or task_id)),
-                "primary_video_path": primary_path,
-                "save_path": save_path,
-                "saved": task_id in history_set or bool(save_path and os.path.exists(save_path)),
-            })
+        review_items = build_review_items(user_no, user_has, history)
+        claimed_items = [item for item in review_items if item.get("source") == "claimed"]
         completed = len(history)
         per_user[user] = {
             "remaining": remaining,
@@ -657,6 +719,8 @@ def build_annotation_stats(mode):
             "completed": completed,
             "total": remaining + claimed,
             "claimed_items": claimed_items,
+            "review_items": review_items,
+            "saved_review_items": [item for item in review_items if item.get("saved")],
         }
         total_remaining += remaining
         total_claimed += claimed
