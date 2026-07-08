@@ -986,8 +986,8 @@ class VideoPlayer(QWidget):
         self.previous_button.setDisabled(True)
         video_load_button_layout.addWidget(self.previous_button)
 
-        self.choose_video_button = QPushButton("选择已保存/修复", self)
-        self.choose_video_button.clicked.connect(self.select_repair_video_and_load)
+        self.choose_video_button = QPushButton("选择 episode", self)
+        self.choose_video_button.clicked.connect(self.select_episode_and_load)
         if self.mode != '语言标注':
             self.choose_video_button.hide()
         video_load_button_layout.addWidget(self.choose_video_button)
@@ -2189,7 +2189,7 @@ class VideoPlayer(QWidget):
         items = user_stats.get("review_items") or user_stats.get("claimed_items", []) or []
         return [item for item in items if isinstance(item, dict) and item.get("task_id")]
 
-    def choose_repair_video(self, stats, message):
+    def choose_episode(self, stats, message):
         items = self.repair_items_from_stats(stats)
         if not items:
             return "", []
@@ -2197,7 +2197,7 @@ class VideoPlayer(QWidget):
         saved_task_ids = [item["task_id"] for item in items if item.get("saved")]
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("选择要修复的标注")
+        dialog.setWindowTitle("选择 episode")
         dialog.setFixedSize(760, 430)
         layout = QVBoxLayout(dialog)
 
@@ -2228,7 +2228,7 @@ class VideoPlayer(QWidget):
         layout.addWidget(repair_list)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
-        button_box.button(QDialogButtonBox.Ok).setText("打开修复")
+        button_box.button(QDialogButtonBox.Ok).setText("打开 episode")
         button_box.button(QDialogButtonBox.Cancel).setText("取消")
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
@@ -2239,20 +2239,23 @@ class VideoPlayer(QWidget):
         selected_item = repair_list.currentItem()
         return (selected_item.data(Qt.UserRole), saved_task_ids) if selected_item is not None else ("", saved_task_ids)
 
-    def select_repair_video_and_load(self):
+    def select_episode_and_load(self):
         if self.mode != '语言标注':
             return
         stats = request_annotation_stats(self.ip_address, self.port, 'lang')
         message, _ = self.no_video_message(stats)
-        repair_video_path, saved_task_ids = self.choose_repair_video(stats, message)
+        repair_video_path, saved_task_ids = self.choose_episode(stats, message)
         if not repair_video_path:
             return
+        if repair_video_path == self.video_path:
+            self.smart_message("当前已是所选 episode")
+            return
         if self.has_anno():
-            if not self.ask_yes_no(
-                "提示",
-                "当前视频有未保存标注。打开其他视频会放弃当前未保存修改，是否继续？",
-                default_yes=False,
-            ):
+            if not self.ask_yes_no("提示", "确认保存当前标注并打开所选 episode？"):
+                return
+            self.video_position_label.setText(f"帧: -/-")
+            res = self.save_lang_anno()
+            if res == -1:
                 return
         self.load_specific_video_async(
             repair_video_path,
@@ -2279,7 +2282,7 @@ class VideoPlayer(QWidget):
             )
             message, claimed_count = self.no_video_message(stats)
             if self.mode == '语言标注' and claimed_count > 0:
-                repair_video_path, saved_task_ids = self.choose_repair_video(stats, message)
+                repair_video_path, saved_task_ids = self.choose_episode(stats, message)
                 if repair_video_path:
                     repair_res = request_video_and_anno(
                         self.ip_address,
