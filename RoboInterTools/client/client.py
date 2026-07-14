@@ -1285,6 +1285,7 @@ class VideoPlayer(QWidget):
         self.current_frame = 0
         self.is_first = True
         self.last_frame = None
+        self.video_views = None
         self.ori_video = {}
         self.vis_track_res = False
         self.sam_anno = False
@@ -1500,6 +1501,9 @@ class VideoPlayer(QWidget):
             self.time_select.hide()
 
     def pre_sam_object(self):
+        if self.mode != '分割标注':
+            return
+
         if self.sam_object_id[self.progress_slider.value()] > 0:
             self.sam_object_id[self.progress_slider.value()] -= 1
         if self.sam_object_id[self.progress_slider.value()] == 0:
@@ -1526,7 +1530,9 @@ class VideoPlayer(QWidget):
         #     self.keyframe_bar.hide()
     
     def next_sam_object(self):
-        
+        if self.mode != '分割标注':
+            return
+
         self.sam_object_id[self.progress_slider.value()] += 1
         if self.sam_object_id[self.progress_slider.value()] == len(self.tracking_points_sam[self.progress_slider.value()]):
             self.tracking_points_sam[self.progress_slider.value()].append(
@@ -2464,20 +2470,21 @@ class VideoPlayer(QWidget):
                 QImage.Format_RGB888,
             )
             label.setPixmap(QPixmap.fromImage(q_image))
-        self.last_frame = True
+        self.last_frame = None
                 
     def seek_video(self):
-        if self.last_frame is None:
+        if not self.video_views and len(self.ori_video) == 0:
             return 
         frame_number = self.progress_slider.value()
         self.update_frame(frame_number)
         self.cur_frame_idx = self.progress_slider.value()
         self.video_position_label.setText(f"帧: {self.cur_frame_idx+1}/{self.frame_count}")
-        
-        self.sam_object_id[self.cur_frame_idx] = 0
-        self.sam_obj_pos_label.setText(f"标注物体: {self.sam_object_id[self.cur_frame_idx]+1}/{len(self.tracking_points_sam[self.cur_frame_idx])}")
-        self.sam_pre_button.setDisabled(True)
-        self.sam_next_button.setDisabled(False)
+
+        if self.mode == '分割标注':
+            self.sam_object_id[self.cur_frame_idx] = 0
+            self.sam_obj_pos_label.setText(f"标注物体: {self.sam_object_id[self.cur_frame_idx]+1}/{len(self.tracking_points_sam[self.cur_frame_idx])}")
+            self.sam_pre_button.setDisabled(True)
+            self.sam_next_button.setDisabled(False)
         
         video_text = self.lang_anno.get((0, 0), "")
         self.video_lang_input.setText(f"视频整体描述: {video_text}" if video_text else "")
@@ -2974,7 +2981,7 @@ class VideoPlayer(QWidget):
             self.add_object_sep_2_id()
         elif key == Qt.Key_P:
             self.next_button.click()
-        elif key == Qt.Key_E:
+        elif key == Qt.Key_E and self.mode == '分割标注':
             self.sam_next_button.click()
     
     def add_object_sep(self):
